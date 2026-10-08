@@ -134,9 +134,15 @@ impl Database {
         f(&guard)
     }
 
-    /// Atomically store a batch of events plus the cursor positions that produced them.
+    /// Atomically store a batch of events plus the cursor positions that produced them, filed under the agent's
+    /// default account.
     pub fn commit(&self, batch: &Batch) -> Result<CommitStats> {
-        self.with_writer(|state| writer::commit(state, batch))
+        self.commit_for(crate::model::DEFAULT_ACCOUNT, batch)
+    }
+
+    /// Like [`Database::commit`], but the events belong to `account` of the batch's agent.
+    pub fn commit_for(&self, account: &str, batch: &Batch) -> Result<CommitStats> {
+        self.with_writer(|state| writer::commit(state, batch, account))
     }
 }
 

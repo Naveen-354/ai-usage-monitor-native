@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod aggregation;
 pub mod api;
 pub mod collectors;

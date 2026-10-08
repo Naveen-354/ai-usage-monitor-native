@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::error::Result;
-use crate::model::{catalog, AgentId, ProjectRef, UsageEvent};
+use crate::model::{catalog, AgentId, ProjectRef, UsageEvent, DEFAULT_ACCOUNT};
 
 pub struct WriterState {
     pub conn: Connection,
@@ -106,6 +106,7 @@ struct Existing {
     id: i64,
     ts_utc_ms: i64,
     agent_id: String,
+    account_id: String,
     model_id: i64,
     project_id: i64,
     counters: Counters,
@@ -121,9 +122,9 @@ pub fn ensure_agents(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn commit(state: &mut WriterState, batch: &Batch) -> Result<CommitStats> {
+pub(super) fn commit(state: &mut WriterState, batch: &Batch, account: &str) -> Result<CommitStats> {
     let WriterState { conn, cache } = state;
-    let result = commit_inner(conn, cache, batch);
+    let result = commit_inner(conn, cache, batch, account);
     if result.is_err() {
         // The transaction rolled back; ids cached during it may no longer exist.
         cache.clear();
@@ -131,7 +132,7 @@ pub(super) fn commit(state: &mut WriterState, batch: &Batch) -> Result<CommitSta
     result
 }
 
-fn commit_inner(conn: &mut Connection, cache: &mut IdCache, batch: &Batch) -> Result<CommitStats> {
+fn commit_inner(conn: &mut Connection, cache: &mut IdCache, batch: &Batch, account: &str) -> Result<CommitStats> {
     if cache.sessions.len() > MAX_CACHED_SESSIONS {
         cache.sessions.clear();
     }
@@ -140,7 +141,7 @@ fn commit_inner(conn: &mut Connection, cache: &mut IdCache, batch: &Batch) -> Re
     let mut min_ts: Option<i64> = None;
 
     for ev in &batch.events {
-        match upsert_event(&tx, cache, ev)? {
+        match upsert_event(&tx, cache, ev, account)? {
             Outcome::Inserted => {
                 stats.inserted += 1;
                 min_ts = Some(min_ts.map_or(ev.ts_utc_ms, |m| m.min(ev.ts_utc_ms)));
@@ -190,7 +191,18 @@ enum Outcome {
     Rejected,
 }
 
-fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent) -> Result<Outcome> {
+/// The key an event is stored under. The default account keeps the collector's own key (so everything recorded before
+/// accounts existed still matches); any other account's keys are scoped by the account, so the same upstream id seen in
+/// two accounts can never be mistaken for one event.
+fn scoped_key(account: &str, key: &str) -> String {
+    if account == DEFAULT_ACCOUNT {
+        key.to_string()
+    } else {
+        format!("{account}\u{1f}{key}")
+    }
+}
+
+fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent, account: &str) -> Result<Outcome> {
     let Some(accuracy) = ev.accuracy.storable() else {
         return Ok(Outcome::Rejected);
     };
@@ -206,19 +218,21 @@ fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent) -> Resul
         reasoning: ev.reasoning_tokens.map(to_i64).unwrap_or(0),
     };
 
+    let db_key = scoped_key(account, &ev.dedupe_key);
     let existing = tx
         .prepare_cached(
             "SELECT id, ts_utc_ms, agent_id, model_id, project_id, input_tokens, output_tokens,
-                    cache_read_tokens, cache_write_tokens, reasoning_tokens, accuracy
+                    cache_read_tokens, cache_write_tokens, reasoning_tokens, accuracy, account_id
              FROM usage_events WHERE dedupe_key = ?1",
         )?
-        .query_row([&ev.dedupe_key], |r| {
+        .query_row([&db_key], |r| {
             let reasoning: Option<i64> = r.get(9)?;
             let acc: String = r.get(10)?;
             Ok(Existing {
                 id: r.get(0)?,
                 ts_utc_ms: r.get(1)?,
                 agent_id: r.get(2)?,
+                account_id: r.get(11)?,
                 model_id: r.get(3)?,
                 project_id: r.get(4)?,
                 counters: Counters {
@@ -245,11 +259,11 @@ fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent) -> Resul
             };
             tx.prepare_cached(
                 "INSERT INTO usage_events (dedupe_key, agent_id, model_id, project_id, session_id, ts_utc_ms,
-                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, accuracy, source)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, accuracy, source, account_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             )?
             .execute(params![
-                ev.dedupe_key,
+                db_key,
                 ev.agent,
                 model_id,
                 project_id,
@@ -261,10 +275,11 @@ fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent) -> Resul
                 new.cache_write,
                 ev.reasoning_tokens.map(to_i64),
                 accuracy,
-                ev.source
+                ev.source,
+                account
             ])?;
             let estimated = if accuracy == "estimated" { new.total() } else { 0 };
-            bucket_add(tx, ev.ts_utc_ms, ev.agent, model_id, project_id, &new, estimated, 1)?;
+            bucket_add(tx, ev.ts_utc_ms, ev.agent, account, model_id, project_id, &new, estimated, 1)?;
             Ok(Outcome::Inserted)
         }
         Some(old) => {
@@ -300,7 +315,7 @@ fn upsert_event(tx: &Transaction, cache: &mut IdCache, ev: &UsageEvent) -> Resul
             ])?;
             let estimated = if old.estimated { diff.total() } else { 0 };
             // Adjust the bucket the event was originally filed under.
-            bucket_add(tx, old.ts_utc_ms, &old.agent_id, old.model_id, old.project_id, &diff, estimated, 0)?;
+            bucket_add(tx, old.ts_utc_ms, &old.agent_id, &old.account_id, old.model_id, old.project_id, &diff, estimated, 0)?;
             Ok(Outcome::Raised)
         }
     }
@@ -380,6 +395,7 @@ fn bucket_add(
     tx: &Transaction,
     ts_utc_ms: i64,
     agent: &str,
+    account: &str,
     model_id: i64,
     project_id: i64,
     d: &Counters,
@@ -388,10 +404,10 @@ fn bucket_add(
 ) -> Result<()> {
     let bucket = ts_utc_ms.div_euclid(1000).div_euclid(BUCKET_SECONDS) * BUCKET_SECONDS;
     tx.prepare_cached(
-        "INSERT INTO usage_buckets (bucket_utc_s, agent_id, model_id, project_id, input_tokens, output_tokens,
+        "INSERT INTO usage_buckets (bucket_utc_s, agent_id, account_id, model_id, project_id, input_tokens, output_tokens,
             cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_tokens, events)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT (bucket_utc_s, agent_id, model_id, project_id) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT (bucket_utc_s, agent_id, account_id, model_id, project_id) DO UPDATE SET
             input_tokens       = input_tokens       + excluded.input_tokens,
             output_tokens      = output_tokens      + excluded.output_tokens,
             cache_read_tokens  = cache_read_tokens  + excluded.cache_read_tokens,
@@ -403,6 +419,7 @@ fn bucket_add(
     .execute(params![
         bucket,
         agent,
+        account,
         model_id,
         project_id,
         d.input,
@@ -656,10 +673,11 @@ mod tests {
                 let bad: i64 = c.query_row(
                     "SELECT count(*) FROM (
                        SELECT b.bucket_utc_s FROM usage_buckets b
-                       LEFT JOIN (SELECT (ts_utc_ms / 1000 / 900) * 900 AS bk, agent_id, model_id, project_id,
+                       LEFT JOIN (SELECT (ts_utc_ms / 1000 / 900) * 900 AS bk, agent_id, account_id, model_id, project_id,
                                          SUM(input_tokens) i, SUM(output_tokens) o, COUNT(*) n
-                                  FROM usage_events GROUP BY bk, agent_id, model_id, project_id) e
-                         ON e.bk = b.bucket_utc_s AND e.agent_id = b.agent_id AND e.model_id = b.model_id AND e.project_id = b.project_id
+                                  FROM usage_events GROUP BY bk, agent_id, account_id, model_id, project_id) e
+                         ON e.bk = b.bucket_utc_s AND e.agent_id = b.agent_id AND e.account_id = b.account_id
+                            AND e.model_id = b.model_id AND e.project_id = b.project_id
                        WHERE e.i IS NOT b.input_tokens OR e.o IS NOT b.output_tokens OR e.n IS NOT b.events)",
                     [],
                     |r| r.get(0),
@@ -668,5 +686,76 @@ mod tests {
             })
             .unwrap();
         assert!(per_bucket_matches);
+    }
+
+    fn account_total(db: &crate::database::Database, account: &str) -> (i64, i64) {
+        db.with_reader(|c| {
+            let buckets: i64 = c.query_row(
+                "SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) FROM usage_buckets WHERE account_id = ?1",
+                [account],
+                |r| r.get(0),
+            )?;
+            let events: i64 = c.query_row(
+                "SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) FROM usage_events WHERE account_id = ?1",
+                [account],
+                |r| r.get(0),
+            )?;
+            Ok((buckets, events))
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn the_plain_commit_files_everything_under_the_default_account() {
+        let (_d, db) = temp_db();
+        db.commit(&batch(vec![ev("a", 1_000_000, 100, 20)])).unwrap();
+        assert_eq!(account_total(&db, "default"), (120, 120));
+        assert_eq!(account_total(&db, "work"), (0, 0));
+    }
+
+    #[test]
+    fn the_same_upstream_id_in_two_accounts_is_two_events_in_two_buckets() {
+        let (_d, db) = temp_db();
+        let b = batch(vec![ev("same-id", 1_000_000, 100, 20)]);
+        assert_eq!(db.commit_for("default", &b).unwrap().inserted, 1);
+        assert_eq!(db.commit_for("work", &b).unwrap().inserted, 1, "not mistaken for the default account's event");
+        let b2 = batch(vec![ev("same-id", 1_000_000, 7, 3)]);
+        assert_eq!(db.commit_for("personal", &b2).unwrap().inserted, 1);
+        assert_eq!(account_total(&db, "default"), (120, 120));
+        assert_eq!(account_total(&db, "work"), (120, 120));
+        assert_eq!(account_total(&db, "personal"), (10, 10));
+        assert_eq!(bucket_total(&db), 250, "the agent's total is the sum of its accounts");
+    }
+
+    #[test]
+    fn replaying_an_accounts_batch_never_double_counts_and_stays_in_that_account() {
+        let (_d, db) = temp_db();
+        let b = batch(vec![ev("a", 1_000_000, 100, 20), ev("b", 2_000_000, 5, 5)]);
+        db.commit_for("work", &b).unwrap();
+        let again = db.commit_for("work", &b).unwrap();
+        assert_eq!((again.inserted, again.raised), (0, 0));
+        assert_eq!(account_total(&db, "work"), (130, 130));
+        assert_eq!(account_total(&db, "default"), (0, 0));
+    }
+
+    #[test]
+    fn a_streamed_event_raised_later_adjusts_only_its_own_accounts_bucket() {
+        let (_d, db) = temp_db();
+        db.commit_for("default", &batch(vec![ev("x", 1_000_000, 10, 0)])).unwrap();
+        db.commit_for("work", &batch(vec![ev("x", 1_000_000, 10, 0)])).unwrap();
+        let s = db.commit_for("work", &batch(vec![ev("x", 1_000_000, 60, 0)])).unwrap();
+        assert_eq!((s.inserted, s.raised), (0, 1));
+        assert_eq!(account_total(&db, "work"), (60, 60), "the work event grew");
+        assert_eq!(account_total(&db, "default"), (10, 10), "the default account's event did not");
+    }
+
+    #[test]
+    fn accounts_have_their_own_cursors_per_file_so_two_profiles_never_share_a_read_position() {
+        let (_d, db) = temp_db();
+        let cursor = |path: &str| CursorUpdate { path: path.into(), size: 10, mtime_ms: 1, offset: 10, state: None };
+        db.commit_for("default", &Batch { agent: "codex", events: vec![], cursors: vec![cursor("C:/home/.codex/sessions/a.jsonl")] }).unwrap();
+        db.commit_for("work", &Batch { agent: "codex", events: vec![], cursors: vec![cursor("C:/accounts/work/.codex/sessions/a.jsonl")] }).unwrap();
+        let n: i64 = db.with_reader(|c| Ok(c.query_row("SELECT count(*) FROM file_cursors WHERE agent_id = 'codex'", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(n, 2, "different files, so different cursors");
     }
 }

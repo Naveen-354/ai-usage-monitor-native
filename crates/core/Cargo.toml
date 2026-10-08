@@ -3,12 +3,16 @@ name = "ai_usage_monitor_core"
 version = "0.1.0"
 description = "Local-first token usage monitor for AI coding agents"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.89"
 publish = false
 
 [lib]
 name = "ai_usage_monitor_core"
 crate-type = ["rlib"]
+
+[features]
+# Test doubles (a scripted process runner) for other crates' tests; never enabled in a shipped build.
+testing = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -27,6 +31,16 @@ notify = "8"
 [target.'cfg(windows)'.dependencies]
 # Bindings only (no runtime): used to show the overlay without stealing focus and to read back WS_EX_TOPMOST.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# The OS credential store, for the few secrets we may hold (an API key the user gives us): Windows Credential Manager.
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+# macOS Keychain and Linux keyutils. On any other platform the library would only keep secrets in memory, so
+# `KeyringSecretStore::available()` is false there and API-key accounts are refused.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["linux-native"] }

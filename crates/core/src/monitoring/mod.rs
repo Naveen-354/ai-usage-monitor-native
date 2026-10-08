@@ -352,7 +352,7 @@ impl Worker {
         if !materially_changed {
             return;
         }
-        let state_changed = self.written.as_ref().map_or(true, |(p, _)| p.availability != health.availability);
+        let state_changed = self.written.as_ref().is_none_or(|(p, _)| p.availability != health.availability);
         if let Err(e) = self.shared.db.with_writer(|w| queries::save_health(&w.conn, &health)) {
             tracing::warn!(agent = health.agent, "could not save collector health: {e}");
             return;
