@@ -17,11 +17,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::accounts::{account_collector_envs, AccountStore};
 use crate::collectors::{
-    default_health, BatchSink, CollectCtx, CollectError, Detection, Env, ProjectResolver, RunOutcome, SharedCollector, SinkBatch,
+    default_health, BatchSink, CollectCtx, CollectError, CollectSummary, Detection, Env, ProjectResolver, RunOutcome, SharedCollector, SinkBatch,
 };
 use crate::database::{queries, Batch, Database};
-use crate::model::{AgentId, Availability, CollectorHealth};
+use crate::model::{AgentId, Availability, CollectorHealth, DEFAULT_ACCOUNT};
 use crate::settings::SettingsStore;
 use watch::Watcher;
 
@@ -58,6 +59,8 @@ struct Shared {
     db: Arc<Database>,
     settings: Arc<SettingsStore>,
     env: Env,
+    /// Where the managed accounts are listed. `None` = only each agent's default account is read.
+    accounts: Option<AccountStore>,
     notifier: Arc<dyn Notifier>,
     /// Aborts in-flight runs (pause / shutdown). Collectors check it between files.
     cancel: AtomicBool,
@@ -80,10 +83,24 @@ impl Supervisor {
         collectors: Vec<SharedCollector>,
         notifier: Arc<dyn Notifier>,
     ) -> Supervisor {
+        Supervisor::start_with_accounts(db, settings, env, collectors, notifier, None)
+    }
+
+    /// Like [`Supervisor::start`], and every managed account listed in `accounts` is read too: from its own profile folder,
+    /// with its usage filed under that account.
+    pub fn start_with_accounts(
+        db: Arc<Database>,
+        settings: Arc<SettingsStore>,
+        env: Env,
+        collectors: Vec<SharedCollector>,
+        notifier: Arc<dyn Notifier>,
+        accounts: Option<AccountStore>,
+    ) -> Supervisor {
         let shared = Arc::new(Shared {
             db,
             settings,
             env,
+            accounts,
             notifier,
             cancel: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
@@ -248,23 +265,50 @@ impl Worker {
         }
     }
 
+    /// What to read for this agent right now: its default account (the machine's own folders) first, then every managed
+    /// account, each from its own profile folder.
+    fn runs(&self) -> Vec<(String, Env)> {
+        let mut runs = vec![(DEFAULT_ACCOUNT.to_string(), self.shared.env.clone())];
+        if let Some(store) = &self.shared.accounts {
+            let id = self.id();
+            runs.extend(account_collector_envs(store, &self.shared.env).into_iter().filter(|(agent, _, _)| agent == id).map(|(_, account, env)| (account, env)));
+        }
+        runs
+    }
+
     fn cycle(&mut self) {
         let id = self.id();
         let settings = self.shared.settings.get();
 
-        let detection = match guarded(|| self.collector.detect(&self.shared.env)) {
-            Ok(d) => d,
-            Err(msg) => {
-                self.publish_error(format!("detect() crashed (isolated): {msg}"));
-                return;
+        // One detection per account. The default account's is the one health is reported from; a managed account that has no
+        // data yet (just signed in) has nothing to read and is skipped.
+        let mut detections: Vec<(String, Env, Detection)> = Vec::new();
+        for (account, env) in self.runs() {
+            match guarded(|| self.collector.detect(&env)) {
+                Ok(d) => detections.push((account, env, d)),
+                Err(msg) => {
+                    if account == DEFAULT_ACCOUNT {
+                        self.publish_error(format!("detect() crashed (isolated): {msg}"));
+                        return;
+                    }
+                    tracing::warn!(agent = id, account, "detect() crashed for a managed account (isolated): {msg}");
+                }
             }
-        };
-        let specs = guarded(|| self.collector.watch_specs(&detection)).unwrap_or_default();
+        }
+        let mut specs = Vec::new();
+        for (_, _, d) in &detections {
+            specs.extend(guarded(|| self.collector.watch_specs(d)).unwrap_or_default());
+        }
         self.watcher.sync(specs);
 
-        if !detection.is_present() {
+        let default_detection = detections.first().map(|(_, _, d)| d.clone()).unwrap_or_else(Detection::not_found);
+        // The default account runs whenever the agent is there (some collectors read no folder at all); a managed account only
+        // once its folder has something in it.
+        let readable: Vec<&(String, Env, Detection)> =
+            detections.iter().enumerate().filter(|(i, (_, _, d))| d.is_present() && (*i == 0 || !d.roots.is_empty())).map(|(_, run)| run).collect();
+        if !default_detection.is_present() && readable.is_empty() {
             self.last = None;
-            self.publish(&detection, false);
+            self.publish(&default_detection, false);
             return;
         }
         if settings.paused || !settings.agent_enabled(id) {
@@ -276,39 +320,38 @@ impl Worker {
         self.shared.running.lock().unwrap_or_else(|p| p.into_inner()).insert(id, importing);
 
         let projects = self.resolver(settings.project_detection);
-        let mut sink = DbSink::new(&self.shared.db, id, self.shared.notifier.as_ref());
-        let ctx = CollectCtx {
-            env: &self.shared.env,
-            detection: &detection,
-            cursors: &cursors,
-            projects: &projects,
-            cancel: &self.shared.cancel,
-        };
-
-        let result = guarded(|| self.collector.collect_usage(&ctx, &mut sink));
+        let mut outcomes: Vec<RunOutcome> = Vec::new();
+        let (mut committed, mut finished_with_events) = (false, false);
+        for (account, env, detection) in readable {
+            let mut sink = DbSink::new(&self.shared.db, id, account, self.shared.notifier.as_ref());
+            let ctx = CollectCtx { env, detection, cursors: &cursors, projects: &projects, cancel: &self.shared.cancel };
+            let result = guarded(|| self.collector.collect_usage(&ctx, &mut sink));
+            committed |= sink.changed();
+            finished_with_events |= sink.committed_any();
+            match result {
+                Ok(Ok(summary)) => {
+                    self.last_success_ms = Some(now_ms());
+                    self.skipped_total += summary.skipped_records;
+                    outcomes.push(RunOutcome::Ok(summary));
+                }
+                Ok(Err(CollectError::Cancelled)) => {
+                    self.shared.running.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
+                    return;
+                }
+                Ok(Err(CollectError::Unavailable(reason))) => outcomes.push(RunOutcome::Unavailable(reason)),
+                Ok(Err(e)) => outcomes.push(RunOutcome::Failed(e.to_string())),
+                Err(msg) => {
+                    tracing::error!(agent = id, account, "collector panicked (isolated): {msg}");
+                    outcomes.push(RunOutcome::Panicked(msg));
+                }
+            }
+        }
         self.shared.running.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
-
-        let outcome = match result {
-            Ok(Ok(summary)) => {
-                self.last_success_ms = Some(now_ms());
-                self.skipped_total += summary.skipped_records;
-                RunOutcome::Ok(summary)
-            }
-            Ok(Err(CollectError::Cancelled)) => return,
-            Ok(Err(CollectError::Unavailable(reason))) => RunOutcome::Unavailable(reason),
-            Ok(Err(e)) => RunOutcome::Failed(e.to_string()),
-            Err(msg) => {
-                tracing::error!(agent = id, "collector panicked (isolated): {msg}");
-                RunOutcome::Panicked(msg)
-            }
-        };
-        let committed = sink.changed();
-        let finished_with_events = sink.committed_any();
-        self.last = Some(outcome);
+        self.last = combine_outcomes(outcomes);
 
         let first_stats = self.events_total.is_none();
         let ingested = committed || finished_with_events;
-        self.publish(&detection, ingested || first_stats);
+        self.publish(&default_detection, ingested || first_stats);
     }
 
     /// Recompute health (and, if events may have changed, the stored totals), persist it, notify the UI.
@@ -364,10 +407,41 @@ impl Worker {
     }
 }
 
+/// What the agent's health is built from when several accounts were read in one cycle: a failure in any of them is reported
+/// (never hidden by the others doing fine); "unavailable" only when nothing at all could be read; otherwise the runs add up.
+fn combine_outcomes(outcomes: Vec<RunOutcome>) -> Option<RunOutcome> {
+    if outcomes.len() <= 1 {
+        return outcomes.into_iter().next();
+    }
+    if let Some(bad) = outcomes.iter().find(|o| matches!(o, RunOutcome::Panicked(_))).or_else(|| outcomes.iter().find(|o| matches!(o, RunOutcome::Failed(_)))) {
+        return Some(bad.clone());
+    }
+    let mut total = CollectSummary::default();
+    let mut any_ok = false;
+    for o in &outcomes {
+        if let RunOutcome::Ok(s) = o {
+            any_ok = true;
+            total.files_seen += s.files_seen;
+            total.files_read += s.files_read;
+            total.skipped_records += s.skipped_records;
+            total.notes.extend(s.notes.iter().cloned());
+            if let Some(t) = s.last_event_ms {
+                total.saw_event(t);
+            }
+        }
+    }
+    if any_ok {
+        Some(RunOutcome::Ok(total))
+    } else {
+        outcomes.into_iter().next()
+    }
+}
+
 /// Writes collector batches to the database and tells the UI as history streams in.
 struct DbSink<'a> {
     db: &'a Database,
     agent: AgentId,
+    account: &'a str,
     notifier: &'a dyn Notifier,
     inserted: u64,
     raised: u64,
@@ -376,8 +450,8 @@ struct DbSink<'a> {
 }
 
 impl<'a> DbSink<'a> {
-    fn new(db: &'a Database, agent: AgentId, notifier: &'a dyn Notifier) -> Self {
-        DbSink { db, agent, notifier, inserted: 0, raised: 0, batches: 0, last_notify: Instant::now() }
+    fn new(db: &'a Database, agent: AgentId, account: &'a str, notifier: &'a dyn Notifier) -> Self {
+        DbSink { db, agent, account, notifier, inserted: 0, raised: 0, batches: 0, last_notify: Instant::now() }
     }
 
     /// Did this run change any stored counts?
@@ -392,7 +466,7 @@ impl<'a> DbSink<'a> {
 
 impl BatchSink for DbSink<'_> {
     fn commit(&mut self, batch: SinkBatch) -> Result<(), CollectError> {
-        let stats = self.db.commit(&Batch { agent: self.agent, events: batch.events, cursors: batch.cursors })?;
+        let stats = self.db.commit_for(self.account, &Batch { agent: self.agent, events: batch.events, cursors: batch.cursors })?;
         self.inserted += stats.inserted;
         self.raised += stats.raised;
         self.batches += 1;

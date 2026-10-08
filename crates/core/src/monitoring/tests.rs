@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::accounts::AccountStore;
 use crate::collectors::{AgentCollector, AgentInfo, CollectSummary, Presence, WatchSpec};
 use crate::database::testutil::temp_db;
 use crate::database::CursorUpdate;
@@ -323,4 +324,185 @@ fn shutdown_joins_every_worker() {
     let t = Instant::now();
     r.sup.shutdown();
     assert!(t.elapsed() < Duration::from_secs(3));
+}
+
+// ------------------------------------------------------------------------------------------------ accounts
+
+/// A collector that reads `<home>/sessions/<tokens>-<name>.txt` for whatever `home` it is given, so a test can put usage
+/// in the machine's own folder and in a managed account's folder and see where each lands.
+struct HomeAware {
+    explode_in: Option<&'static str>,
+}
+
+impl AgentCollector for HomeAware {
+    fn id(&self) -> AgentId {
+        "codex"
+    }
+    fn get_agent_info(&self) -> AgentInfo {
+        AgentInfo { id: "codex", name: "Home aware", data_sources: &[], caveats: &[] }
+    }
+    fn detect(&self, env: &Env) -> Detection {
+        let root = env.home.join("sessions");
+        Detection { presence: Presence::Installed, roots: if root.is_dir() { vec![root] } else { vec![] }, binary: None, note: None }
+    }
+    fn collect_usage(&self, ctx: &CollectCtx<'_>, sink: &mut dyn BatchSink) -> Result<CollectSummary, CollectError> {
+        let mut summary = CollectSummary::default();
+        let Some(root) = ctx.detection.roots.first() else { return Ok(summary) };
+        if self.explode_in.is_some_and(|marker| root.to_string_lossy().contains(marker)) {
+            panic!("this account's folder blew up the collector");
+        }
+        let (mut events, mut cursors) = (Vec::new(), Vec::new());
+        for entry in std::fs::read_dir(root)?.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(tokens) = name.split('-').next().and_then(|t| t.parse::<u64>().ok()) else { continue };
+            let path = entry.path().to_string_lossy().into_owned();
+            let mut e = event("codex", &path, 1_700_000_000_000);
+            e.input_tokens = tokens;
+            e.output_tokens = 0;
+            summary.saw_event(e.ts_utc_ms);
+            events.push(e);
+            cursors.push(CursorUpdate { path, size: 1, mtime_ms: 1, offset: 1, state: None });
+        }
+        sink.commit(SinkBatch { events, cursors })?;
+        Ok(summary)
+    }
+}
+
+fn account_input(db: &Database, account: &str) -> i64 {
+    db.with_reader(|c| Ok(c.query_row("SELECT COALESCE(SUM(input_tokens), 0) FROM usage_buckets WHERE agent_id = 'codex' AND account_id = ?1", [account], |r| r.get(0))?))
+        .unwrap()
+}
+
+fn put_usage(home: &std::path::Path, file: &str) {
+    std::fs::create_dir_all(home.join("sessions")).unwrap();
+    std::fs::write(home.join("sessions").join(file), b"x").unwrap();
+}
+
+struct AccountRig {
+    rig: Rig,
+    store: AccountStore,
+    profiles: PathBuf,
+}
+
+fn account_rig(collector: HomeAware) -> AccountRig {
+    let (dir, db) = temp_db();
+    let settings = Arc::new(SettingsStore::load(db.clone()).unwrap());
+    let notifier = Arc::new(CountingNotifier::default());
+    let store = AccountStore::new(db.clone());
+    store.ensure_defaults(&["codex"], 1).unwrap();
+    let home = dir.path().join("machine-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let sup = Supervisor::start_with_accounts(db.clone(), settings.clone(), Env::with_home(&home), vec![Arc::new(collector)], notifier.clone(), Some(store.clone()));
+    let profiles = dir.path().join("profiles");
+    AccountRig { rig: Rig { _dir: dir, db, settings, notifier, sup }, store, profiles }
+}
+
+impl AccountRig {
+    fn machine_home(&self) -> PathBuf {
+        self.rig._dir.path().join("machine-home")
+    }
+
+    fn add_account(&self, label: &str) -> PathBuf {
+        let a = self.store.insert_managed("codex", label, |id| self.profiles.join(id), 10).unwrap();
+        a.profile_dir.unwrap().join("home")
+    }
+}
+
+#[test]
+fn a_managed_accounts_usage_is_read_from_its_own_folder_and_filed_under_it() {
+    let r = account_rig(HomeAware { explode_in: None });
+    put_usage(&r.machine_home(), "100-machine.txt");
+    put_usage(&r.add_account("Work"), "7-work.txt");
+    r.rig.sup.refresh_now();
+    wait_until("both accounts ingested", || account_input(&r.rig.db, "default") == 100 && account_input(&r.rig.db, "work") == 7);
+    let agent_total = r.rig.db.with_reader(|c| queries::totals_by_agent(c, 0, i64::MAX / 2)).unwrap();
+    assert_eq!(agent_total["codex"].input, 107, "the agent's total is the sum of its accounts");
+}
+
+#[test]
+fn two_managed_accounts_never_mix_even_with_files_of_the_same_name() {
+    let r = account_rig(HomeAware { explode_in: None });
+    put_usage(&r.add_account("Work"), "5-same.txt");
+    put_usage(&r.add_account("Personal"), "9-same.txt");
+    r.rig.sup.refresh_now();
+    wait_until("both read", || account_input(&r.rig.db, "work") == 5 && account_input(&r.rig.db, "personal") == 9);
+    assert_eq!(account_input(&r.rig.db, "default"), 0, "nothing leaks into the default account");
+}
+
+#[test]
+fn a_new_file_in_an_accounts_folder_is_picked_up_on_the_next_scan_without_double_counting() {
+    let r = account_rig(HomeAware { explode_in: None });
+    let home = r.add_account("Work");
+    put_usage(&home, "5-a.txt");
+    r.rig.sup.refresh_now();
+    wait_until("first file", || account_input(&r.rig.db, "work") == 5);
+    put_usage(&home, "3-b.txt");
+    r.rig.sup.refresh_now();
+    wait_until("second file", || account_input(&r.rig.db, "work") == 8);
+    r.rig.sup.refresh_now();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(account_input(&r.rig.db, "work"), 8, "rescanning is idempotent");
+}
+
+#[test]
+fn a_managed_account_with_no_data_yet_is_skipped_quietly_and_the_default_account_is_unaffected() {
+    let r = account_rig(HomeAware { explode_in: None });
+    put_usage(&r.machine_home(), "100-machine.txt");
+    r.add_account("Fresh"); // signed in a moment ago: its folder has no sessions yet
+    r.rig.sup.refresh_now();
+    wait_until("default read", || account_input(&r.rig.db, "default") == 100);
+    let health = r.rig.db.with_reader(queries::load_health).unwrap();
+    let codex = health.iter().find(|h| h.agent == "codex").unwrap();
+    assert!(matches!(codex.availability, Availability::Ok), "{:?}", codex.availability);
+}
+
+#[test]
+fn a_removed_account_is_no_longer_read() {
+    let r = account_rig(HomeAware { explode_in: None });
+    let home = r.add_account("Work");
+    put_usage(&home, "5-a.txt");
+    r.rig.sup.refresh_now();
+    wait_until("read once", || account_input(&r.rig.db, "work") == 5);
+    r.store.soft_remove("codex", "work", 50).unwrap();
+    put_usage(&home, "4-b.txt");
+    r.rig.sup.refresh_now();
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(account_input(&r.rig.db, "work"), 5, "what was recorded stays; nothing new is read from a removed account");
+}
+
+#[test]
+fn a_collector_that_crashes_on_one_accounts_folder_does_not_hide_the_other_accounts_but_is_reported() {
+    let r = account_rig(HomeAware { explode_in: Some("bomb") });
+    put_usage(&r.machine_home(), "100-machine.txt");
+    put_usage(&r.add_account("Bomb"), "7-x.txt");
+    put_usage(&r.add_account("Fine"), "3-y.txt");
+    r.rig.sup.refresh_now();
+    wait_until("the healthy accounts are read", || account_input(&r.rig.db, "default") == 100 && account_input(&r.rig.db, "fine") == 3);
+    assert_eq!(account_input(&r.rig.db, "bomb"), 0);
+    wait_until("the crash is reported, not hidden", || {
+        r.rig.db.with_reader(queries::load_health).unwrap().iter().any(|h| h.agent == "codex" && matches!(h.availability, Availability::Error { .. }))
+    });
+}
+
+#[test]
+fn without_an_account_store_only_the_default_account_is_read_exactly_as_before() {
+    let (dir, db) = temp_db();
+    let settings = Arc::new(SettingsStore::load(db.clone()).unwrap());
+    let home = dir.path().join("h");
+    put_usage(&home, "100-machine.txt");
+    let sup = Supervisor::start(db.clone(), settings, Env::with_home(&home), vec![Arc::new(HomeAware { explode_in: None })], Arc::new(NoopNotifier));
+    wait_until("read", || account_input(&db, "default") == 100);
+    sup.shutdown();
+}
+
+#[test]
+fn run_outcomes_of_several_accounts_combine_sensibly() {
+    let ok = |skipped| RunOutcome::Ok(CollectSummary { skipped_records: skipped, files_seen: 1, files_read: 1, ..Default::default() });
+    assert!(combine_outcomes(vec![]).is_none());
+    assert_eq!(combine_outcomes(vec![ok(2)]), Some(ok(2)));
+    assert_eq!(combine_outcomes(vec![ok(2), ok(3)]), Some(RunOutcome::Ok(CollectSummary { skipped_records: 5, files_seen: 2, files_read: 2, ..Default::default() })));
+    assert!(matches!(combine_outcomes(vec![ok(0), RunOutcome::Failed("x".into())]), Some(RunOutcome::Failed(_))), "a failure is never hidden");
+    assert!(matches!(combine_outcomes(vec![RunOutcome::Failed("x".into()), RunOutcome::Panicked("p".into())]), Some(RunOutcome::Panicked(_))));
+    assert!(matches!(combine_outcomes(vec![RunOutcome::Unavailable("a".into()), ok(0)]), Some(RunOutcome::Ok(_))), "one account with data is enough to show numbers");
+    assert!(matches!(combine_outcomes(vec![RunOutcome::Unavailable("a".into()), RunOutcome::Unavailable("b".into())]), Some(RunOutcome::Unavailable(_))));
 }

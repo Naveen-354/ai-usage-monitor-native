@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Period, Range};
 use crate::database::queries::{self, Counters};
@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::model::{catalog, Availability, CollectorHealth};
 use crate::settings::Settings;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Totals {
     pub input: u64,
@@ -28,6 +28,11 @@ pub struct Totals {
 }
 
 impl Totals {
+    /// Counters as the UI shows them: the headline total honours the "count cached tokens" setting.
+    pub fn from_counters(c: &Counters, count_cached: bool) -> Totals {
+        Totals::from(c, count_cached)
+    }
+
     fn from(c: &Counters, count_cached: bool) -> Totals {
         Totals {
             input: c.input,

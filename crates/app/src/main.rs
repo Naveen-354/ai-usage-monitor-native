@@ -13,13 +13,9 @@ mod shell;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use ai_usage_monitor_core::api::Config;
+use ai_usage_monitor_core::api::{default_data_dir, Config};
 use native_platform::platform::tray::{TrayAction, TrayState};
 use native_ui::expanded::Page;
-
-/// Own folder, deliberately NOT `dev.aiusage.monitor` (the folder the earlier build of this app used): two builds must
-/// never write to one SQLite file.
-const DATA_DIR_NAME: &str = "dev.aiusage.monitor.native";
 
 #[derive(Debug, Default, PartialEq)]
 struct Args {
@@ -74,10 +70,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
 }
 
 fn data_dir(args: &Args) -> PathBuf {
-    args.data_dir
-        .clone()
-        .or_else(|| std::env::var_os("AI_USAGE_MONITOR_DATA_DIR").map(PathBuf::from))
-        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(DATA_DIR_NAME))
+args.data_dir.clone().unwrap_or_else(default_data_dir)
 }
 
 fn fail(msg: &str, code: i32) -> ! {
@@ -170,6 +163,7 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ai_usage_monitor_core::api::DATA_DIR_NAME;
 
     fn args(list: &[&str]) -> Result<Args, String> {
         parse_args(list.iter().map(|s| s.to_string()))

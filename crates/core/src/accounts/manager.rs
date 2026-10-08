@@ -14,6 +14,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::error::{AccountError, AccountResult};
+use super::runner::SystemRunner;
+use super::secrets::KeyringSecretStore;
+use crate::aggregation::{account_usage, AccountUsage};
+use crate::database::Database;
+use crate::settings::SettingsStore;
 use super::lock::{AgentLock, DEFAULT_WAIT};
 use super::model::{Account, AccountKind, AuthState};
 use super::provider::{AccountProvider, LoginMethod, Observation, ProfileDirs, SwitchSupport};
@@ -111,6 +116,22 @@ impl AccountManager {
         data_dir: PathBuf,
     ) -> AccountManager {
         AccountManager { store, providers: by_id(providers), runner, secrets, env, data_dir, lock_wait: DEFAULT_WAIT }
+    }
+
+    /// The manager over the real machine: the shared database in `data_dir`, the real process runner and the OS credential
+    /// store. Starts no background work, so the CLI can use it next to a running app. Calls [`init`](Self::init).
+    pub fn open(data_dir: &Path) -> AccountResult<AccountManager> {
+        std::fs::create_dir_all(data_dir)?;
+        let db = Database::open(&data_dir.join("usage.db"))?;
+        let manager = AccountManager::new(AccountStore::new(db), Arc::new(SystemRunner), Arc::new(KeyringSecretStore), Env::from_system(), data_dir.to_path_buf());
+        manager.init()?;
+        Ok(manager)
+    }
+
+    /// Usage of every account over today / this week / this month / this year / lifetime, from the shared database.
+    pub fn usage(&self) -> AccountResult<Vec<AccountUsage>> {
+        let settings = SettingsStore::load(self.store.database().clone())?.get();
+        Ok(self.store.database().with_reader(|c| account_usage(c, &settings, &chrono::Local, chrono::Utc::now()))?)
     }
 
     /// For tests: give up waiting for a lock sooner.

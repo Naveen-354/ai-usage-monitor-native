@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Local, NaiveDate, Utc};
 
-use crate::aggregation::{self, build_overview, custom_range, range_for, DayTotal, Overview, Period};
+use crate::accounts::{AccountManager, AccountStore, KeyringSecretStore, SystemRunner};
+use crate::aggregation::{self, account_usage, build_overview, custom_range, range_for, AccountUsage, DayTotal, Overview, Period};
 use crate::collectors::{self, Env};
 use crate::database::{queries, Database};
 use crate::error::{AppError, Result};
@@ -26,6 +27,19 @@ pub enum CoreEvent {
     /// A collector's health changed (shares the trigger with `OverviewChanged`).
     HealthChanged,
 }
+
+/// The folder the app and `agm` keep their shared database, logs and account profiles in. Deliberately not
+/// `dev.aiusage.monitor` (the folder an earlier build of this app used): two builds must never write to one SQLite file.
+/// `AI_USAGE_MONITOR_DATA_DIR` overrides it.
+pub fn default_data_dir() -> PathBuf {
+    std::env::var_os("AI_USAGE_MONITOR_DATA_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(DATA_DIR_NAME))
+}
+
+/// Folder name under the platform's per-user data directory.
+pub const DATA_DIR_NAME: &str = "dev.aiusage.monitor.native";
 
 pub struct Config {
     pub data_dir: PathBuf,
@@ -58,6 +72,7 @@ impl Notifier for ChannelNotifier {
 pub struct Core {
     db: Arc<Database>,
     settings: Arc<SettingsStore>,
+    accounts: Arc<AccountManager>,
     supervisor: Option<Supervisor>,
     subscribers: Subscribers,
     data_dir: PathBuf,
@@ -75,17 +90,26 @@ impl Core {
         let settings = Arc::new(SettingsStore::load(db.clone())?);
         let subscribers: Subscribers = Arc::new(Mutex::new(Vec::new()));
 
+        // Accounts: every agent gets its default account, and a sign-in that was interrupted last time is settled. A failure
+        // here must not keep the usage monitor from starting.
+        let store = AccountStore::new(db.clone());
+        let accounts = Arc::new(AccountManager::new(store.clone(), Arc::new(SystemRunner), Arc::new(KeyringSecretStore), Env::from_system(), config.data_dir.clone()));
+        if let Err(e) = accounts.init() {
+            tracing::warn!("could not set up accounts: {e}");
+        }
+
         let supervisor = config.monitoring_on.then(|| {
-            Supervisor::start(
+            Supervisor::start_with_accounts(
                 db.clone(),
                 settings.clone(),
                 Env::from_system(),
                 collectors::registry(),
                 Arc::new(ChannelNotifier(subscribers.clone())),
+                Some(store),
             )
         });
 
-        Ok(Core { db, settings, supervisor, subscribers, data_dir: config.data_dir, db_notice: report.notice() })
+        Ok(Core { db, settings, accounts, supervisor, subscribers, data_dir: config.data_dir, db_notice: report.notice() })
     }
 
     /// Usage for a local calendar period. `from`/`to` (`YYYY-MM-DD`, inclusive) are required for [`Period::Custom`].
@@ -114,6 +138,17 @@ impl Core {
         let settings = self.settings.get();
         let today = Local::now().date_naive();
         self.db.with_reader(|c| aggregation::daily_totals(c, &settings, &Local, today, days))
+    }
+
+    /// The accounts of every agent: list, sign in, switch, check, remove. The desktop app and `agm` use the same one.
+    pub fn accounts(&self) -> &Arc<AccountManager> {
+        &self.accounts
+    }
+
+    /// Usage per account over today / this week / this month / this year / lifetime.
+    pub fn account_usage(&self) -> Result<Vec<AccountUsage>> {
+        let settings = self.settings.get();
+        self.db.with_reader(|c| account_usage(c, &settings, &Local, Utc::now()))
     }
 
     pub fn settings(&self) -> Settings {
@@ -265,6 +300,66 @@ mod tests {
         assert_eq!(got, vec![DayTotal { date: now.with_timezone(&Local).date_naive(), total: 160 }]);
         core.update_settings(&serde_json::json!({"countCachedInTotal": false})).unwrap();
         assert_eq!(core.daily_totals(371).unwrap()[0].total, 110, "the heat map follows the cached-tokens setting like the totals do");
+        core.shutdown();
+    }
+
+    #[test]
+    fn a_fresh_core_has_a_default_account_active_for_every_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_in(&dir);
+        let agents = core.accounts().agents().unwrap();
+        assert_eq!(agents.len(), crate::model::catalog().len());
+        assert!(agents.iter().all(|a| a.active.as_deref() == Some("default") && a.accounts.len() == 1));
+        core.shutdown();
+    }
+
+    #[test]
+    fn usage_is_reported_per_account_and_adds_up_to_the_agents_total() {
+        use crate::database::Batch;
+        use crate::model::{Accuracy, UsageEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_in(&dir);
+        let now = Utc::now().timestamp_millis();
+        let event = |key: &str, input: u64| UsageEvent {
+            agent: "codex",
+            model: "m".into(),
+            ts_utc_ms: now,
+            input_tokens: input,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: None,
+            session_id: None,
+            project: None,
+            source: "t",
+            accuracy: Accuracy::Real,
+            dedupe_key: key.into(),
+        };
+        core.db.commit_for("default", &Batch { agent: "codex", events: vec![event("a", 100)], cursors: vec![] }).unwrap();
+        core.db.commit_for("work", &Batch { agent: "codex", events: vec![event("a", 7)], cursors: vec![] }).unwrap();
+        let usage = core.account_usage().unwrap();
+        let of = |account: &str| usage.iter().find(|u| u.agent_id == "codex" && u.account_id == account).unwrap().totals;
+        assert_eq!((of("default").day.total, of("work").day.total), (100, 7));
+        assert_eq!((of("default").lifetime.total, of("work").lifetime.total), (100, 7));
+        let overview = core.overview(Period::Day, None, None).unwrap();
+        let codex = overview.agents.iter().find(|a| a.id == "codex").unwrap().totals;
+        assert_eq!(codex.map(|t| t.total), Some(107), "the existing dashboard still shows the agent's total, across accounts");
+        core.shutdown();
+    }
+
+    #[test]
+    fn the_cli_and_the_app_share_one_set_of_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_in(&dir);
+        // what `agm` does: open the same data folder without starting any monitoring
+        let cli = AccountManager::open(dir.path()).unwrap();
+        assert_eq!(cli.agents().unwrap().len(), crate::model::catalog().len());
+        cli.store().insert_managed("codex", "Work", |id| dir.path().join("accounts").join("codex").join(id), 1).unwrap();
+        cli.use_account("codex", "work").unwrap();
+        let seen_by_app = core.accounts().current().unwrap();
+        assert!(seen_by_app.iter().any(|(agent, acc)| agent == "codex" && acc.account_id == "work"), "the app sees what the CLI chose");
+        core.accounts().use_account("codex", "default").unwrap();
+        assert_eq!(cli.store().active("codex").unwrap().unwrap().account_id, "default", "and the CLI sees what the app chose");
         core.shutdown();
     }
 
