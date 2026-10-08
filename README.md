@@ -19,6 +19,38 @@ there is no telemetry: [PRIVACY.md](PRIVACY.md) says exactly what is read, [docs
 
 CPU while the flame animates live was ~3.5 % (spike) to ~11 % (debug builds) and depends on activity. Not measured over hours (no leak test).
 
+## Build and install (Windows 10/11)
+
+There is no installer yet; the release build is a single self-contained `.exe` (fonts and SQLite are compiled in; no WebView2, Node or
+other runtime to install). It needs the Visual C++ runtime (`VCRUNTIME140.dll`), which most PCs already have.
+
+**Build** - needs [Rust](https://rustup.rs) (stable, `x86_64-pc-windows-msvc`) and the Visual Studio *Build Tools* with the
+"Desktop development with C++" workload (the linker, and the C compiler for the bundled SQLite). Close a running copy first,
+otherwise Windows will not let the build replace the `.exe`:
+
+```powershell
+git clone https://github.com/Naveen-354/ai-usage-monitor-native.git
+cd ai-usage-monitor-native
+cargo build --release -p ai-usage-monitor-native      # a few minutes the first time
+# result: target\release\ai-usage-monitor-native.exe  (about 8 MB)
+```
+
+**Install** - copy the exe somewhere permanent and add a Start-menu shortcut:
+
+```powershell
+$dir = "$env:LOCALAPPDATA\Programs\AI Usage Monitor"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item .\target\release\ai-usage-monitor-native.exe $dir
+$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\AI Usage Monitor.lnk"
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+$s.TargetPath = "$dir\ai-usage-monitor-native.exe"; $s.WorkingDirectory = $dir; $s.Save()
+# optional - start at login: put the same shortcut in the Startup folder
+Copy-Item $lnk "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"
+```
+
+**Uninstall** - quit from the tray menu, delete the install folder and the shortcut(s). Your data stays in
+`%APPDATA%\dev.aiusage.monitor.native` until you delete it.
+
 ## Run
 
 ```bash
@@ -66,7 +98,7 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 ## Verified (by running it, not by reading it)
 
-* `cargo test --workspace`: 419 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
+* `cargo test --workspace`: 420 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
   `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 * Real data end to end: the overlay, expanded view, Settings, Diagnostics and Privacy pages show the real counts; per-collector
   numbers match independent checks made against the agents' own files (e.g. Gemini 1,812 events).
@@ -82,7 +114,9 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
   first-generation `statistics` module (charts) is not shown anywhere. Also not implemented: JSON/CSV export, clear history, custom data location.
 * **Light theme:** built from the same tokens, but only the dark theme was compared against the browser rendering.
 * The tray menu was exercised through its event path, not by right-clicking it; the global hotkeys' key mapping is tested but no key was pressed;
-  start-with-system is wired but was never toggled on a real machine (it writes a start-up entry).
+  start-with-system is wired but was never toggled on a real machine (it writes a start-up entry), and the Settings page has no row for it
+  (as in the original design), so use the Startup-folder shortcut above. Its entry used to pass an argument the app rejected, which would have
+  stopped the app at every login; fixed and pinned by a test, but still not tried on a real login.
 * No installer, no CI, no macOS/Linux build (the platform code is written to be portable but has never been compiled for them).
 * No long-running leak test; memory/CPU above are 30-40 s samples.
 * OpenCode's values are unvalidated (no local data to compare against).

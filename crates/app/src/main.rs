@@ -58,6 +58,8 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
                 a.sets.push((k.to_string(), value));
             }
             "--selftest-shell" => a.selftest_shell = true,
+            // Accepted and ignored: an earlier start-up entry passed it, and an unknown flag would stop the app at login.
+            "--minimized" => {}
             "--open" => {
                 let v = it.next().ok_or("--open needs a page: statistics, settings, diagnostics or privacy")?;
                 a.open = Some(parse_page(&v).ok_or_else(|| format!("unknown page '{v}'"))?);
@@ -194,6 +196,14 @@ mod tests {
         assert_eq!(a.sets[1], ("theme".into(), serde_json::Value::String("light".into())));
         assert_eq!(a.sets[2], ("overlayX".into(), serde_json::Value::from(300)));
         assert_eq!(a.sets[3], ("period".into(), serde_json::Value::String("week".into())));
+    }
+
+    #[test]
+    fn the_app_starts_with_exactly_the_arguments_its_start_up_entry_passes() {
+        // Regression: the entry used to pass `--minimized`, which this parser rejected, so the app exited at every login.
+        let launch: Vec<&str> = native_platform::platform::autostart::LAUNCH_ARGS.to_vec();
+        assert_eq!(args(&launch).unwrap(), Args::default());
+        assert_eq!(args(&["--minimized"]).unwrap(), Args::default(), "an entry written by an older build still starts the app");
     }
 
     #[test]
