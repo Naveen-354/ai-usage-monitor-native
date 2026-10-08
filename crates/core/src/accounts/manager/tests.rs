@@ -752,3 +752,70 @@ fn the_monitor_reads_each_managed_accounts_usage_from_that_accounts_own_folder()
     f.mgr.remove("codex", "work", false).unwrap();
     assert_eq!(account_collector_envs(f.mgr.store(), &f.env).len(), 1, "a removed account is no longer read");
 }
+
+// ------------------------------------------------------------------------------------------------ the real agents
+
+/// Runs the *real* `codex`, `claude` and `opencode` against empty scratch profile folders and checks that what they print is
+/// understood: an account that was never signed in must come out as "not signed in". Each agent is pointed at a folder inside
+/// the temp directory with its own documented variable, so no real sign-in is read or changed. Needs the tools installed, so it
+/// is ignored by default: `cargo test -p ai_usage_monitor_core real_agents -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn real_agents_report_an_empty_profile_as_not_signed_in() {
+    use crate::accounts::runner::SystemRunner;
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let db = Database::open(&data.join("usage.db")).unwrap();
+    let mgr = AccountManager::new(AccountStore::new(db), Arc::new(SystemRunner), Arc::new(MemorySecretStore::new()), Env::from_system(), data.clone());
+    mgr.init().unwrap();
+    let mut checked = 0;
+    for agent in ["codex", "claude", "opencode"] {
+        if !mgr.agent(agent).unwrap().installed {
+            eprintln!("{agent}: not installed here, skipped");
+            continue;
+        }
+        let acc = mgr.store().insert_managed(agent, "Probe", |id| data.join("accounts").join(agent).join(id), 1).unwrap();
+        std::fs::create_dir_all(acc.profile_dir.as_ref().unwrap().join("home")).unwrap();
+        let after = mgr.check_auth(agent, &acc.account_id).unwrap();
+        eprintln!("{agent}: {} ({:?})", after.auth.label(), after.auth_detail);
+        assert_eq!(after.auth, AuthState::NotLoggedIn, "{agent} should report an empty profile as not signed in");
+        checked += 1;
+    }
+    assert!(checked > 0, "none of the agents is installed, so nothing was checked");
+}
+
+#[test]
+fn a_profile_folder_that_has_gone_missing_is_recreated_before_the_agent_is_asked_anything() {
+    // Real Codex fails with a configuration error when CODEX_HOME names a folder that does not exist.
+    let f = fx();
+    add_codex(&f, "Work");
+    let agent_dir = f.data.join("accounts").join("codex").join("work").join("home").join(".codex");
+
+    std::fs::remove_dir_all(&agent_dir).unwrap();
+    f.runner.script(Reply::status("login status", 0, "Logged in using ChatGPT", ""));
+    f.mgr.check_auth("codex", "work").unwrap();
+    assert!(agent_dir.is_dir(), "recreated for the status check");
+
+    f.mgr.use_account("codex", "work").unwrap();
+    std::fs::remove_dir_all(&agent_dir).unwrap();
+    f.mgr.launch_spec("codex", &[]).unwrap();
+    assert!(agent_dir.is_dir(), "and recreated for a launch");
+}
+
+#[test]
+fn a_profile_path_outside_the_accounts_folder_is_never_created() {
+    let f = fx();
+    add_codex(&f, "Work");
+    let outside = f.data.parent().unwrap().join("not-ours");
+    f.mgr
+        .store()
+        .database()
+        .with_writer(|w| Ok(w.conn.execute("UPDATE accounts SET profile_dir = ?1 WHERE agent_id = 'codex' AND account_id = 'work'", [outside.to_string_lossy().as_ref()])?))
+        .unwrap();
+    f.runner.script(Reply::status("login status", 1, "", "Not logged in
+"));
+    f.mgr.check_auth("codex", "work").unwrap();
+    assert!(!outside.exists(), "nothing is created outside the accounts folder, whatever the database says");
+    let climbing = f.data.join("accounts").join("..").join("..").join("escaped");
+    assert!(!f.mgr.is_managed_path(&climbing), "`..` cannot climb out");
+}

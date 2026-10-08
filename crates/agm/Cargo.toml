@@ -1,0 +1,20 @@
+[package]
+name = "agm"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+description = "Manage several accounts for each AI coding agent: sign in, switch, run, and see usage per account."
+
+[[bin]]
+name = "agm"
+path = "src/main.rs"
+
+[dependencies]
+ai_usage_monitor_core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"
+ai_usage_monitor_core = { path = "../core", features = ["testing"] }

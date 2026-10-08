@@ -173,6 +173,25 @@ impl AccountManager {
         self.accounts_root().join(agent).join(id)
     }
 
+    /// Is `dir` somewhere under the accounts folder, with no `..` to climb out of it? (A path check, not a disk check, so it also
+    /// works for a folder that does not exist yet.)
+    fn is_managed_path(&self, dir: &Path) -> bool {
+        dir.starts_with(self.accounts_root()) && dir.components().all(|c| c != std::path::Component::ParentDir)
+    }
+
+    /// Makes sure the folders an agent is pointed at exist before it is started or asked anything. Codex, for one, refuses to
+    /// run when `CODEX_HOME` names a folder that is not there. Only ever creates folders inside the accounts folder.
+    fn ensure_profile_dirs(&self, p: &dyn AccountProvider, account: &Account) {
+        let Some(profile) = self.profile_of(account) else { return };
+        if !account.profile_dir.as_deref().is_some_and(|d| self.is_managed_path(d)) {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&profile.home);
+        for (_, v) in p.profile_env(&profile) {
+            let _ = std::fs::create_dir_all(Path::new(&v));
+        }
+    }
+
     /// The profile of a managed account, from where the store says it is - refused unless it really is under our folder.
     fn profile_of(&self, account: &Account) -> Option<ProfileDirs> {
         let dir = account.profile_dir.as_ref()?;
@@ -390,6 +409,7 @@ impl AccountManager {
             let mut spec = ProcessSpec { program: binary, args, ..Default::default() };
             if managed {
                 let Some(profile) = &profile else { return Observation::unknown() };
+                self.ensure_profile_dirs(p, account);
                 spec.env = p.profile_env(profile).into_iter().map(|(k, v)| (OsString::from(k), v)).collect();
                 // an API key in the shell must not make a different account look signed in
                 spec.env_remove = p.capabilities().api_key_env.map(|k| vec![OsString::from(k)]).unwrap_or_default();
@@ -518,6 +538,7 @@ impl AccountManager {
         let mut spec = ProcessSpec { program: binary, args: args.to_vec(), ..Default::default() };
         if account.kind == AccountKind::Managed {
             let profile = self.profile_of(&account).ok_or_else(|| AccountError::NeedsLogin(format!("{agent}/{}", account.account_id)))?;
+            self.ensure_profile_dirs(p.as_ref(), &account);
             spec.env = p.profile_env(&profile).into_iter().map(|(k, v)| (OsString::from(k), v)).collect();
             if let Some(var) = p.capabilities().api_key_env {
                 match self.secrets.get(&SecretKey::api_key(agent, &account.account_id))? {
