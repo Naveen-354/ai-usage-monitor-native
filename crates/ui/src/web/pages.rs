@@ -17,7 +17,8 @@ use crate::view::{AgentOverview, AnimationIntensity, AppInfo, Availability, Corn
 
 // ------------------------------------------------------------------------------------------------ header and tabs
 
-pub const PAGES: [(Page, &str); 4] = [(Page::Statistics, "STATISTICS"), (Page::Settings, "SETTINGS"), (Page::Diagnostics, "DIAGNOSTICS"), (Page::Privacy, "PRIVACY")];
+pub const PAGES: [(Page, &str); 5] =
+    [(Page::Statistics, "STATISTICS"), (Page::Accounts, "ACCOUNTS"), (Page::Settings, "SETTINGS"), (Page::Diagnostics, "DIAGNOSTICS"), (Page::Privacy, "PRIVACY")];
 pub const HEADER_H: f32 = 38.89 + BW;
 
 /// Width of each tab: its text plus 16 px padding either side and its borders (the first also has a left border).
@@ -533,11 +534,16 @@ mod tests {
 
     #[test]
     fn the_tabs_are_as_wide_as_in_the_browser() {
-        // Measured at 11px bold with 0.12em spacing: STATISTICS 115.2 (incl. both borders), SETTINGS 97.38, DIAGNOSTICS 121.13, PRIVACY 89.45.
+        // Measured in a browser at 11px bold with 0.12em spacing: STATISTICS 115.2 (incl. both borders), SETTINGS 97.38,
+        // DIAGNOSTICS 121.13, PRIVACY 89.45. ACCOUNTS is new, so it has no browser measurement; it follows the same formula.
         let w = tab_widths(&ctx());
-        for (got, want) in w.iter().zip([115.2, 97.38, 121.13, 89.45]) {
-            assert!((got - want).abs() < 0.2, "tab width {got} vs browser {want}");
+        let by_label = |label: &str| w[PAGES.iter().position(|(_, l)| *l == label).unwrap()];
+        for (label, want) in [("STATISTICS", 115.2), ("SETTINGS", 97.38), ("DIAGNOSTICS", 121.13), ("PRIVACY", 89.45)] {
+            assert!((by_label(label) - want).abs() < 0.2, "{label}: tab width {} vs browser {want}", by_label(label));
         }
+        let accounts = by_label("ACCOUNTS");
+        assert!((accounts - by_label("SETTINGS")).abs() < 0.01 && accounts < by_label("STATISTICS"), "8 letters in a monospace font: as wide as SETTINGS, narrower than STATISTICS (10): {accounts}");
+        assert!(w.iter().sum::<f32>() + 213.0 + 24.0 <= 780.0, "all five tabs and the title fit in the window's minimum width");
     }
 
     #[test]

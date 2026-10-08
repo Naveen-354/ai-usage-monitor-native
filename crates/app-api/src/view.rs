@@ -220,3 +220,116 @@ pub struct History {
     /// Per-project totals: (project name or "UNKNOWN PROJECT", tokens).
     pub by_project: Vec<(String, u64)>,
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// ACCOUNTS: Agent -> Accounts -> Active account -> Usage (what the Accounts page shows and `agm` prints)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Whether an account can be used right now, as far as we know. Mirrors the core's `AuthState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthStateView {
+    Valid,
+    Expired,
+    NotLoggedIn,
+    Pending,
+    Unknown,
+}
+
+impl AuthStateView {
+    /// Short upper-case label for a tag.
+    pub fn label(self) -> &'static str {
+        match self {
+            AuthStateView::Valid => "SIGNED IN",
+            AuthStateView::Expired => "EXPIRED",
+            AuthStateView::NotLoggedIn => "NOT SIGNED IN",
+            AuthStateView::Pending => "SIGN-IN PENDING",
+            AuthStateView::Unknown => "NOT CHECKED",
+        }
+    }
+
+    /// Should the account offer "sign in again"?
+    pub fn needs_sign_in(self) -> bool {
+        matches!(self, AuthStateView::Expired | AuthStateView::NotLoggedIn | AuthStateView::Pending)
+    }
+}
+
+/// Tokens in the five spans every account is shown over (the headline total, honouring "count cached tokens").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpanUsageView {
+    pub day: u64,
+    pub week: u64,
+    pub month: u64,
+    pub year: u64,
+    pub lifetime: u64,
+}
+
+impl SpanUsageView {
+    pub fn add(&self, o: &SpanUsageView) -> SpanUsageView {
+        SpanUsageView {
+            day: self.day.saturating_add(o.day),
+            week: self.week.saturating_add(o.week),
+            month: self.month.saturating_add(o.month),
+            year: self.year.saturating_add(o.year),
+            lifetime: self.lifetime.saturating_add(o.lifetime),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    pub account_id: String,
+    pub label: String,
+    /// The agent's own sign-in (cannot be removed) rather than one this app manages.
+    pub is_default: bool,
+    pub auth: AuthStateView,
+    /// A short plain-language reason, never raw agent output.
+    pub auth_detail: Option<String>,
+    /// E-mail or user name the agent itself reported.
+    pub identity: Option<String>,
+    pub active: bool,
+    pub checked_utc_ms: Option<i64>,
+    pub last_used_utc_ms: Option<i64>,
+    /// `None` = nothing has ever been recorded for this account (shown as "-", never as 0).
+    pub usage: Option<SpanUsageView>,
+}
+
+/// Can this agent keep a second account, and if not, why not?
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchingView {
+    pub supported: bool,
+    /// The documented environment variable that keeps accounts apart, when supported.
+    pub mechanism: Option<String>,
+    /// Why switching is unavailable, when it is.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAccountsView {
+    pub agent_id: String,
+    pub name: String,
+    pub color: String,
+    pub installed: bool,
+    pub switching: SwitchingView,
+    /// Sign-in methods the app can start for a new account (`standard`, `device-code`).
+    pub login_methods: Vec<String>,
+    /// The id of the account the agent is using now.
+    pub active: Option<String>,
+    pub accounts: Vec<AccountView>,
+    /// Usage recorded by accounts that have since been removed (their history stays in every total).
+    pub removed_usage: Option<SpanUsageView>,
+    /// The agent's usage across all its accounts, removed ones included.
+    pub total: Option<SpanUsageView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountsOverview {
+    pub agents: Vec<AgentAccountsView>,
+    /// Across every agent and account.
+    pub total: Option<SpanUsageView>,
+}

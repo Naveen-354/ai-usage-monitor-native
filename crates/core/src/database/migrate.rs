@@ -48,7 +48,13 @@ fn migrate_with(conn: &mut Connection, migrations: &[Migration]) -> Result<()> {
         )));
     }
     for m in migrations.iter().filter(|m| m.version > current) {
-        let tx = conn.transaction()?;
+        // Take the write lock up front and look again: another process (the app, an `agm` command) may be applying the very same
+        // migration right now, and with a deferred transaction two of them could both decide it is theirs to apply.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let applied: i64 = tx.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| r.get(0))?;
+        if applied >= m.version {
+            continue; // somebody else got there first; dropping `tx` rolls the (empty) transaction back
+        }
         tx.execute_batch(m.sql).map_err(|e| {
             AppError::Migration(format!("migration {:04}_{} failed: {e}", m.version, m.name))
         })?;

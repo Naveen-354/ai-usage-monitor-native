@@ -97,6 +97,8 @@ impl AppStore {
                 // Refresh to show progress
                 self.refresh(backend);
             }
+            // Accounts are read by the Accounts page itself, not kept in this store.
+            BackendEvent::AccountsChanged | BackendEvent::AccountNotice(_) | BackendEvent::AccountsChecked => {}
         }
     }
 

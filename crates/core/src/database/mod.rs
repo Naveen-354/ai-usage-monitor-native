@@ -24,15 +24,34 @@ pub struct Database {
     reader: Mutex<Connection>,
 }
 
+/// Is this a "somebody else has the file right now" error? (Windows reports a sharing violation as an I/O error.)
+fn is_contention(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode::{DatabaseBusy, DatabaseLocked, SystemIoFailure};
+    matches!(e, rusqlite::Error::SqliteFailure(f, _) if matches!(f.code, DatabaseBusy | DatabaseLocked | SystemIoFailure))
+}
+
 fn configure(conn: &Connection) -> Result<()> {
-    // WAL: readers never block the writer. NORMAL sync is safe under WAL and much cheaper.
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // The wait comes FIRST: the app and several `agm` processes may open the same file at the same moment, and every statement
+    // below - the switch to WAL included - must wait for the others instead of failing at once.
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    // WAL: readers never block the writer. NORMAL sync is safe under WAL and much cheaper. Switching the file to WAL needs a
+    // moment of exclusive access, which the busy timeout does not cover on every platform, so it is retried briefly.
+    let mut attempt = 0;
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => break,
+            Err(e) if is_contention(&e) && attempt < 60 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25 + 10 * attempt.min(20)));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     // Keep the page cache small: the monitor must stay well under its RAM budget.
     conn.pragma_update(None, "cache_size", -8192)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(())
 }
 
@@ -95,7 +114,7 @@ impl Database {
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        reader.busy_timeout(std::time::Duration::from_secs(5))?;
+        reader.busy_timeout(std::time::Duration::from_secs(10))?;
         reader.pragma_update(None, "query_only", "ON")?;
         reader.pragma_update(None, "cache_size", -4096)?;
 
@@ -155,5 +174,34 @@ pub(crate) mod testutil {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("usage.db")).unwrap();
         (dir, db)
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+
+    /// The desktop app and any number of `agm` commands open the same database file, often at the same moment (a script that
+    /// switches several agents; a login finishing while the app starts). Every one of them must get a working database.
+    #[test]
+    fn many_connections_opening_a_new_database_at_the_same_moment_all_succeed() {
+        for round in 0..4 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("usage.db");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    let (path, barrier) = (path.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        Database::open(&path).map(|db| db.with_reader(|c| Ok(c.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get::<_, i64>(0))?)).unwrap())
+                    })
+                })
+                .collect();
+            for h in handles {
+                let version = h.join().unwrap().unwrap_or_else(|e| panic!("round {round}: a connection could not open the database: {e}"));
+                assert_eq!(version, LATEST_VERSION);
+            }
+        }
     }
 }

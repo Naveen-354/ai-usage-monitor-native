@@ -1,6 +1,7 @@
 // Release builds are a GUI app: no console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod accounts_view;
 mod app;
 mod backend;
 mod bridge;
@@ -33,6 +34,7 @@ struct Args {
 fn parse_page(s: &str) -> Option<Page> {
     match s.to_ascii_lowercase().as_str() {
         "statistics" => Some(Page::Statistics),
+        "accounts" => Some(Page::Accounts),
         "settings" => Some(Page::Settings),
         "diagnostics" => Some(Page::Diagnostics),
         "privacy" => Some(Page::Privacy),
@@ -57,7 +59,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             // Accepted and ignored: an earlier start-up entry passed it, and an unknown flag would stop the app at login.
             "--minimized" => {}
             "--open" => {
-                let v = it.next().ok_or("--open needs a page: statistics, settings, diagnostics or privacy")?;
+                let v = it.next().ok_or("--open needs a page: statistics, accounts, settings, diagnostics or privacy")?;
                 a.open = Some(parse_page(&v).ok_or_else(|| format!("unknown page '{v}'"))?);
             }
             other => return Err(format!("unknown argument '{other}'")),

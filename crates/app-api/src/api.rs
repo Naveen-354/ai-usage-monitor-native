@@ -1,4 +1,4 @@
-use crate::view::{AppInfo, Availability, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use crate::view::{AccountsOverview, AppInfo, Availability, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
 use std::sync::mpsc::Receiver;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -54,6 +54,12 @@ pub enum BackendEvent {
     HealthChanged,
     DatabaseNotice(String),
     ImportProgress { agent: String, percent: u32 },
+    /// An account was added, removed, switched, checked or signed in: re-read the accounts.
+    AccountsChanged,
+    /// Something about accounts the user should read (a sign-in finished, or failed, and why).
+    AccountNotice(String),
+    /// The background check of every account's sign-in has finished.
+    AccountsChecked,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +81,19 @@ pub trait Backend: Send + Sync {
     /// One total per local calendar day for the `days` days up to and including today (ascending; days without usage are
     /// left out). Counts the same things the overview counts. This is what the activity heat map draws.
     fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError>;
+    /// Agent -> accounts -> active account -> usage, for the Accounts page.
+    fn accounts(&self) -> Result<AccountsOverview, BackendError>;
+    /// Makes an account the one its agent uses from now on; returns a warning to show (e.g. "its sign-in has expired").
+    fn use_account(&self, agent: &str, account: &str) -> Result<Option<String>, BackendError>;
+    /// Forgets an account: its sign-in folder and any key kept for it. Usage history stays unless `purge_usage`.
+    fn remove_account(&self, agent: &str, account: &str, purge_usage: bool) -> Result<(), BackendError>;
+    /// Starts signing in a new account in a console window of its own and returns at once; the outcome arrives as
+    /// [`BackendEvent::AccountsChanged`] and [`BackendEvent::AccountNotice`].
+    fn add_account(&self, agent: &str, label: &str, device_code: bool) -> Result<(), BackendError>;
+    /// Starts signing an existing account in again (its session expired); same notification as `add_account`.
+    fn reauthenticate_account(&self, agent: &str, account: &str) -> Result<(), BackendError>;
+    /// Asks every agent, in the background, whether each account is still signed in.
+    fn check_accounts(&self) -> Result<(), BackendError>;
     fn settings(&self) -> Result<Settings, BackendError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<Settings, BackendError>;
     fn app_info(&self) -> Result<AppInfo, BackendError>;

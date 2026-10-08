@@ -9,13 +9,16 @@ use std::sync::Mutex;
 
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
 use app_api::mock;
-use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AccountView, AccountsOverview, AppInfo, AuthStateView, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, SpanUsageView};
 use serde_json::Value;
 
 use crate::backend::AppBackend;
 use crate::bridge;
 
 pub struct DemoBackend {
+    /// The Accounts page's fixture. Switching, adding and removing change this copy, like the real thing changes the database,
+    /// so a demo run can show the whole interaction without touching anything.
+    accounts: Mutex<AccountsOverview>,
     settings: Mutex<Settings>,
     shift_ms: i64,
     quit: AtomicBool,
@@ -52,6 +55,7 @@ impl DemoBackend {
         }
         let now = chrono::Utc::now().timestamp_millis();
         Ok(Self {
+            accounts: Mutex::new(mock::accounts_overview()),
             settings: Mutex::new(settings),
             shift_ms: now - mock::NOW_MS,
             quit: AtomicBool::new(false),
@@ -98,6 +102,108 @@ impl Backend for DemoBackend {
 
     fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
         Ok(mock::daily_totals(chrono::Local::now().date_naive(), days))
+    }
+
+    fn accounts(&self) -> Result<AccountsOverview, BackendError> {
+        self.accounts.lock().map(|a| a.clone()).map_err(|_| err("accounts lock poisoned"))
+    }
+
+    fn use_account(&self, agent: &str, account: &str) -> Result<Option<String>, BackendError> {
+        let warning = {
+            let mut all = self.accounts.lock().map_err(|_| err("accounts lock poisoned"))?;
+            let a = all.agents.iter_mut().find(|a| a.agent_id == agent).ok_or_else(|| err(format!("unknown agent '{agent}'")))?;
+            let target = a.accounts.iter().find(|x| x.account_id == account || x.label.eq_ignore_ascii_case(account)).map(|x| x.account_id.clone()).ok_or_else(|| err(format!("agent '{agent}' has no account '{account}'")))?;
+            for x in &mut a.accounts {
+                x.active = x.account_id == target;
+            }
+            a.active = Some(target.clone());
+            a.accounts.iter().find(|x| x.account_id == target).filter(|x| x.auth == AuthStateView::Expired).map(|x| format!("{} has expired; sign in again", x.label))
+        };
+        self.broadcast(BackendEvent::AccountsChanged);
+        Ok(warning)
+    }
+
+    fn remove_account(&self, agent: &str, account: &str, purge_usage: bool) -> Result<(), BackendError> {
+        {
+            let mut all = self.accounts.lock().map_err(|_| err("accounts lock poisoned"))?;
+            let a = all.agents.iter_mut().find(|a| a.agent_id == agent).ok_or_else(|| err(format!("unknown agent '{agent}'")))?;
+            let idx = a.accounts.iter().position(|x| x.account_id == account).ok_or_else(|| err(format!("agent '{agent}' has no account '{account}'")))?;
+            if a.accounts[idx].is_default {
+                return Err(err("the default account is the agent's own sign-in and cannot be removed here"));
+            }
+            let gone = a.accounts.remove(idx);
+            if !purge_usage {
+                if let Some(u) = gone.usage {
+                    a.removed_usage = Some(a.removed_usage.map_or(u, |r| r.add(&u)));
+                }
+            } else if let (Some(u), Some(t)) = (gone.usage, a.total) {
+                a.total = Some(SpanUsageView {
+                    day: t.day.saturating_sub(u.day),
+                    week: t.week.saturating_sub(u.week),
+                    month: t.month.saturating_sub(u.month),
+                    year: t.year.saturating_sub(u.year),
+                    lifetime: t.lifetime.saturating_sub(u.lifetime),
+                });
+            }
+            if a.active.as_deref() == Some(account) {
+                a.active = Some("default".into());
+                for x in &mut a.accounts {
+                    x.active = x.account_id == "default";
+                }
+            }
+        }
+        self.broadcast(BackendEvent::AccountsChanged);
+        Ok(())
+    }
+
+    fn add_account(&self, agent: &str, label: &str, _device_code: bool) -> Result<(), BackendError> {
+        let id = {
+            let mut all = self.accounts.lock().map_err(|_| err("accounts lock poisoned"))?;
+            let a = all.agents.iter_mut().find(|a| a.agent_id == agent).ok_or_else(|| err(format!("unknown agent '{agent}'")))?;
+            if !a.switching.supported {
+                return Err(err(a.switching.reason.clone().unwrap_or_else(|| "this agent cannot have a second account".into())));
+            }
+            let label = label.trim();
+            if label.is_empty() || a.accounts.iter().any(|x| x.label.eq_ignore_ascii_case(label)) {
+                return Err(err(format!("there is already an account called '{label}' for this agent, or the name is empty")));
+            }
+            let id: String = label.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            a.accounts.push(AccountView {
+                account_id: id.clone(),
+                label: label.to_string(),
+                is_default: false,
+                auth: AuthStateView::Valid,
+                auth_detail: None,
+                identity: None,
+                active: false,
+                checked_utc_ms: Some(chrono::Utc::now().timestamp_millis()),
+                last_used_utc_ms: None,
+                usage: None,
+            });
+            id
+        };
+        self.broadcast(BackendEvent::AccountsChanged);
+        self.broadcast(BackendEvent::AccountNotice(format!("{agent}/{id} is signed in (demo: nothing was really signed in).")));
+        Ok(())
+    }
+
+    fn reauthenticate_account(&self, agent: &str, account: &str) -> Result<(), BackendError> {
+        {
+            let mut all = self.accounts.lock().map_err(|_| err("accounts lock poisoned"))?;
+            let a = all.agents.iter_mut().find(|a| a.agent_id == agent).ok_or_else(|| err(format!("unknown agent '{agent}'")))?;
+            let x = a.accounts.iter_mut().find(|x| x.account_id == account).ok_or_else(|| err(format!("agent '{agent}' has no account '{account}'")))?;
+            x.auth = AuthStateView::Valid;
+            x.auth_detail = None;
+        }
+        self.broadcast(BackendEvent::AccountsChanged);
+        self.broadcast(BackendEvent::AccountNotice(format!("{agent}/{account} is signed in again (demo).")));
+        Ok(())
+    }
+
+    fn check_accounts(&self) -> Result<(), BackendError> {
+        self.broadcast(BackendEvent::AccountsChanged);
+        self.broadcast(BackendEvent::AccountsChecked);
+        Ok(())
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {
@@ -278,6 +384,42 @@ mod tests {
         assert!(!d.quit_requested());
         d.quit();
         assert!(d.quit_requested());
+    }
+
+    #[test]
+    fn the_demo_accounts_can_be_switched_added_signed_in_again_and_removed_like_the_real_ones() {
+        let d = demo(&[]);
+        let rx = d.subscribe();
+        let codex = |d: &DemoBackend| d.accounts().unwrap().agents.into_iter().find(|a| a.agent_id == "codex").unwrap();
+        assert_eq!(codex(&d).active.as_deref(), Some("work"));
+
+        // switching one agent leaves the others alone
+        let claude_before = d.accounts().unwrap().agents.iter().find(|a| a.agent_id == "claude").unwrap().active.clone();
+        assert!(d.use_account("codex", "Personal").unwrap().unwrap().contains("expired"), "the expired account warns");
+        assert_eq!(codex(&d).active.as_deref(), Some("personal"));
+        assert_eq!(d.accounts().unwrap().agents.iter().find(|a| a.agent_id == "claude").unwrap().active, claude_before);
+        assert_eq!(codex(&d).accounts.iter().filter(|a| a.active).count(), 1);
+
+        // sign in again
+        d.reauthenticate_account("codex", "personal").unwrap();
+        assert_eq!(codex(&d).accounts.iter().find(|a| a.account_id == "personal").unwrap().auth, AuthStateView::Valid);
+
+        // add, and a duplicate / monitor-only refusal
+        d.add_account("codex", "Side project", false).unwrap();
+        assert!(codex(&d).accounts.iter().any(|a| a.account_id == "side-project" && a.usage.is_none()));
+        assert!(d.add_account("codex", "side PROJECT", false).is_err());
+        assert!(d.add_account("antigravity", "Second", false).unwrap_err().to_string().contains("credential store"));
+
+        // remove: the history stays in the agent's total
+        let total_before = codex(&d).total.unwrap().lifetime;
+        d.remove_account("codex", "personal", false).unwrap();
+        let after = codex(&d);
+        assert!(after.accounts.iter().all(|a| a.account_id != "personal"));
+        assert_eq!(after.active.as_deref(), Some("default"), "the removed account was the active one: back to the agent's own");
+        assert_eq!(after.total.unwrap().lifetime, total_before, "nothing vanished from the total");
+        assert!(after.removed_usage.unwrap().lifetime >= 2_500_000);
+        assert!(d.remove_account("codex", "default", false).is_err());
+        assert!(rx.try_iter().filter(|e| *e == BackendEvent::AccountsChanged).count() >= 4);
     }
 
     #[test]

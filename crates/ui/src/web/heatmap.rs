@@ -12,7 +12,7 @@ use super::paint::{border, hard_shadow};
 use super::text::{Run, Style, Weight};
 use super::widgets::{h2_style, put};
 use super::wrap::measure;
-use super::{Tokens, BW};
+use super::{blend as over, Tokens, BW};
 use crate::motion::format::format_compact;
 use crate::view::DayTotal;
 
@@ -158,13 +158,6 @@ pub fn tooltip(date: NaiveDate, total: u64) -> String {
     } else {
         format!("{} tokens · {day}", format_compact(total as f64, 3))
     }
-}
-
-/// `fg` over `bg` at opacity `a`, blended in sRGB the way CSS does and returned opaque. (egui premultiplies translucent
-/// colours in linear light, which would make a 10 % tint come out as roughly 37 % - far brighter than the browser's.)
-fn over(bg: Color32, fg: Color32, a: f32) -> Color32 {
-    let ch = |b: u8, f: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * a).round() as u8;
-    Color32::from_rgb(ch(bg.r(), fg.r()), ch(bg.g(), fg.g()), ch(bg.b(), fg.b()))
 }
 
 /// The colour of a square: `ink` at a whisper for no usage, then the accent colour in four strengths.

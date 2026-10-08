@@ -4,6 +4,7 @@
 //! original design, not guessed. The fonts are JetBrains Mono (400/700/800) and Archivo Black, both SIL OFL
 //! (licences are in `assets/fonts`).
 
+pub mod accounts;
 pub mod all_agents;
 pub mod fmt;
 pub mod fonts;
@@ -55,6 +56,13 @@ impl Tokens {
 /// An agent's colour from its `#rrggbb` string (a safe grey when it is malformed).
 pub fn agent_color(hex: &str) -> Color32 {
     crate::theme::agent_color(hex)
+}
+
+/// `fg` over `bg` at opacity `a`, blended in sRGB the way CSS does and returned opaque. (egui premultiplies translucent colours
+/// in linear light, which makes a 10 % tint come out as roughly 37 %: far brighter than the browser's.)
+pub fn blend(bg: Color32, fg: Color32, a: f32) -> Color32 {
+    let ch = |b: u8, f: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * a.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgb(ch(bg.r(), fg.r()), ch(bg.g(), fg.g()), ch(bg.b(), fg.b()))
 }
 
 /// The colour with its alpha replaced by `a` (0..=1), as CSS `rgb(r g b / a)` does.

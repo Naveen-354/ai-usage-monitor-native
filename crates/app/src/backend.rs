@@ -6,17 +6,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use ai_usage_monitor_core::accounts::LoginMethod;
 use ai_usage_monitor_core::aggregation::Period;
 use ai_usage_monitor_core::api::{Config, Core, CoreEvent};
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AccountsOverview, AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
 
+use crate::accounts_view;
 use crate::bridge;
 
 type Listeners = Arc<Mutex<Vec<Sender<BackendEvent>>>>;
 
 fn err(e: impl std::fmt::Display) -> BackendError {
     BackendError::Message(e.to_string())
+}
+
+/// Tells every listener (the UI) something happened.
+fn emit(listeners: &Listeners, ev: BackendEvent) {
+    if let Ok(mut l) = listeners.lock() {
+        l.retain(|tx| tx.send(ev.clone()).is_ok());
+    }
 }
 
 /// What the app needs from a backend beyond the shared [`Backend`] trait, so it can run on the real one or the demo.
@@ -48,6 +57,8 @@ impl AppBackend for CoreBackend {
 pub struct CoreBackend {
     core: Mutex<Option<Core>>,
     listeners: Listeners,
+    /// Wakes the UI from a background thread.
+    repaint: Arc<dyn Fn() + Send + Sync>,
     overlay: Mutex<OverlayDiagnostics>,
     quit: AtomicBool,
     data_dir: PathBuf,
@@ -62,6 +73,7 @@ impl CoreBackend {
         let db_notice = core.database_notice().map(str::to_owned);
         let events = core.subscribe();
         let listeners: Listeners = Arc::default();
+        let repaint_for_threads = repaint.clone();
 
         let pump = listeners.clone();
         std::thread::Builder::new()
@@ -84,6 +96,7 @@ impl CoreBackend {
         Ok(Arc::new(Self {
             core: Mutex::new(Some(core)),
             listeners,
+            repaint: repaint_for_threads,
             overlay: Mutex::new(blank_overlay()),
             quit: AtomicBool::new(false),
             data_dir,
@@ -165,6 +178,30 @@ fn open_path(p: &Path) -> Result<(), BackendError> {
     std::process::Command::new(program).arg(p).spawn().map(|_| ()).map_err(err)
 }
 
+/// Re-checks every account in a background thread (each agent's own status command; one that cannot be reached does not stop
+/// the rest), then tells the UI to re-read the accounts.
+fn spawn_account_check(
+    manager: Arc<ai_usage_monitor_core::accounts::AccountManager>,
+    listeners: Listeners,
+    repaint: Arc<dyn Fn() + Send + Sync>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new().name("account-check".into()).spawn(move || {
+        let _ = manager.check_all();
+        emit(&listeners, BackendEvent::AccountsChanged);
+        emit(&listeners, BackendEvent::AccountsChecked);
+        repaint();
+    })
+}
+
+/// The one-line message shown when a sign-in finishes.
+fn crate_state_notice(a: &ai_usage_monitor_core::accounts::Account) -> String {
+    use ai_usage_monitor_core::accounts::AuthState;
+    match a.auth {
+        AuthState::Valid => format!("{} is signed in{}.", a.display_ref(), a.identity.as_ref().map(|i| format!(" as {i}")).unwrap_or_default()),
+        other => format!("{} finished signing in ({}).", a.display_ref(), other.label().to_lowercase()),
+    }
+}
+
 fn not_yet(what: &str) -> BackendError {
     err(format!("{what} is not implemented in the native app yet"))
 }
@@ -180,6 +217,75 @@ impl Backend for CoreBackend {
         };
         let o = self.with_core(|c| c.overview(p, from.as_deref(), to.as_deref()).map_err(err))?;
         bridge::convert(&o).map_err(BackendError::Message)
+    }
+
+    fn accounts(&self) -> Result<AccountsOverview, BackendError> {
+        self.with_core(|c| {
+            let agents = c.accounts().agents().map_err(err)?;
+            let usage = c.account_usage().map_err(err)?;
+            Ok(accounts_view::overview(&agents, &usage))
+        })
+    }
+
+    fn use_account(&self, agent: &str, account: &str) -> Result<Option<String>, BackendError> {
+        let outcome = self.with_core(|c| c.accounts().use_account(agent, account).map_err(err))?;
+        emit(&self.listeners, BackendEvent::AccountsChanged);
+        Ok(outcome.warning)
+    }
+
+    fn remove_account(&self, agent: &str, account: &str, purge_usage: bool) -> Result<(), BackendError> {
+        self.with_core(|c| c.accounts().remove(agent, account, purge_usage).map_err(err))?;
+        emit(&self.listeners, BackendEvent::AccountsChanged);
+        Ok(())
+    }
+
+    fn add_account(&self, agent: &str, label: &str, device_code: bool) -> Result<(), BackendError> {
+        let manager = self.with_core(|c| Ok(c.accounts().clone()))?;
+        let method = if device_code { LoginMethod::DeviceCode } else { LoginMethod::Standard };
+        // Preparing is quick and reports "not installed" / "that name is taken" straight back to the caller.
+        let plan = manager.plan_login(agent, label, method, None).map_err(err)?;
+        let (listeners, repaint) = (self.listeners.clone(), self.repaint.clone());
+        emit(&listeners, BackendEvent::AccountsChanged); // the pending account shows up at once
+        std::thread::Builder::new()
+            .name("account-sign-in".into())
+            .spawn(move || {
+                let name = plan.account.display_ref();
+                // The agent's own sign-in runs in a console window of its own; this thread waits for it.
+                let notice = match manager.run_login_in_new_window(plan) {
+                    Ok(a) => crate_state_notice(&a),
+                    Err(e) => format!("Signing in {name} did not complete: {e}"),
+                };
+                emit(&listeners, BackendEvent::AccountNotice(notice));
+                emit(&listeners, BackendEvent::AccountsChanged);
+                repaint();
+            })
+            .map_err(err)?;
+        Ok(())
+    }
+
+    fn reauthenticate_account(&self, agent: &str, account: &str) -> Result<(), BackendError> {
+        let manager = self.with_core(|c| Ok(c.accounts().clone()))?;
+        let plan = manager.plan_relogin(agent, account, LoginMethod::Standard, None).map_err(err)?;
+        let (listeners, repaint) = (self.listeners.clone(), self.repaint.clone());
+        std::thread::Builder::new()
+            .name("account-sign-in".into())
+            .spawn(move || {
+                let name = plan.account.display_ref();
+                let notice = match manager.run_login_in_new_window(plan) {
+                    Ok(a) => crate_state_notice(&a),
+                    Err(e) => format!("Signing in {name} again did not complete: {e}"),
+                };
+                emit(&listeners, BackendEvent::AccountNotice(notice));
+                emit(&listeners, BackendEvent::AccountsChanged);
+                repaint();
+            })
+            .map_err(err)?;
+        Ok(())
+    }
+
+    fn check_accounts(&self) -> Result<(), BackendError> {
+        let manager = self.with_core(|c| Ok(c.accounts().clone()))?;
+        spawn_account_check(manager, self.listeners.clone(), self.repaint.clone()).map(|_| ()).map_err(err)
     }
 
     fn history(&self, _period: PeriodOrCustom, _from: Option<String>, _to: Option<String>) -> Result<History, BackendError> {
@@ -388,6 +494,69 @@ mod tests {
         let view: Vec<app_api::view::DayTotal> = bridge::convert(&core_days).unwrap();
         assert_eq!(view, vec![app_api::view::DayTotal { date: "2026-10-08".into(), total: 42 }]);
         b.shutdown();
+    }
+
+    #[test]
+    fn a_fresh_backend_lists_every_agent_with_its_default_account_active_and_nothing_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        let o = b.accounts().unwrap();
+        assert_eq!(o.agents.len(), ai_usage_monitor_core::model::catalog().len());
+        for a in &o.agents {
+            assert_eq!(a.active.as_deref(), Some("default"), "{}", a.agent_id);
+            assert_eq!(a.accounts.len(), 1);
+            assert!(a.accounts[0].active && a.accounts[0].is_default && a.accounts[0].usage.is_none(), "{}: no usage is not zero usage", a.agent_id);
+        }
+        assert!(o.total.is_none());
+        let antigravity = o.agents.iter().find(|a| a.agent_id == "antigravity").unwrap();
+        assert!(!antigravity.switching.supported && antigravity.switching.reason.as_deref().unwrap_or("").contains("credential store"));
+        let codex = o.agents.iter().find(|a| a.agent_id == "codex").unwrap();
+        assert_eq!(codex.switching.mechanism.as_deref(), Some("CODEX_HOME"));
+        assert!(!codex.login_methods.iter().any(|m| m == "api-key"), "keys are never typed into the app");
+    }
+
+    #[test]
+    fn choosing_and_removing_accounts_report_clear_errors_and_tell_the_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        let rx = b.subscribe();
+        assert!(b.use_account("codex", "ghost").unwrap_err().to_string().contains("no account"));
+        assert!(b.use_account("nope", "x").unwrap_err().to_string().contains("unknown agent"));
+        assert!(b.remove_account("codex", "default", false).unwrap_err().to_string().contains("cannot be removed"));
+        assert_eq!(b.use_account("codex", "default").unwrap(), None, "choosing the default account is fine and has nothing to warn about");
+        assert!(rx.try_iter().any(|e| e == BackendEvent::AccountsChanged), "the UI is told to re-read the accounts");
+    }
+
+    #[test]
+    fn adding_an_account_for_an_agent_that_cannot_have_one_is_refused_with_the_reason_before_anything_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        let e = b.add_account("antigravity", "Second", false).unwrap_err().to_string();
+        assert!(e.contains("credential store"), "{e}");
+        assert!(!dir.path().join("accounts").join("antigravity").exists());
+        assert!(b.reauthenticate_account("codex", "default").unwrap_err().to_string().contains("default account"));
+    }
+
+    #[test]
+    fn checking_the_accounts_runs_in_the_background_and_reports_back() {
+        // A manager that can find no agent at all (an empty PATH under a temp home): the check starts no process, so this
+        // never touches a real sign-in.
+        use ai_usage_monitor_core::accounts::{AccountManager, AccountStore, MemorySecretStore, SystemRunner};
+        use ai_usage_monitor_core::collectors::Env;
+        let dir = tempfile::tempdir().unwrap();
+        let db = ai_usage_monitor_core::database::Database::open(&dir.path().join("usage.db")).unwrap();
+        let manager = Arc::new(AccountManager::new(AccountStore::new(db), Arc::new(SystemRunner), Arc::new(MemorySecretStore::new()), Env::with_home(dir.path()), dir.path().to_path_buf()));
+        manager.init().unwrap();
+        let listeners: Listeners = Arc::default();
+        let (tx, rx) = mpsc::channel();
+        listeners.lock().unwrap().push(tx);
+        let woken = Arc::new(AtomicBool::new(false));
+        let w = woken.clone();
+        let handle = spawn_account_check(manager, listeners, Arc::new(move || w.store(true, Ordering::SeqCst))).unwrap();
+        handle.join().unwrap();
+        assert_eq!(rx.try_recv().unwrap(), BackendEvent::AccountsChanged);
+        assert_eq!(rx.try_recv().unwrap(), BackendEvent::AccountsChecked, "the page can stop saying CHECKING");
+        assert!(woken.load(Ordering::SeqCst), "the UI is woken, not left waiting for the next input");
     }
 
     #[test]
