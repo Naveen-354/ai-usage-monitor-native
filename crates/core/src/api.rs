@@ -1,8 +1,8 @@
 //! Frontend-agnostic facade over the backend: everything a UI needs, with no GUI types.
 //!
-//! This mirrors what the former Tauri commands did (`get_overview`, `get_settings`, `update_settings`, `app_info`):
-//! period boundaries are *local* calendar periods (data is stored in UTC), custom ranges are validated the same way,
-//! and a database that was damaged and rebuilt is reported instead of being silent.
+//! It is the whole surface a UI needs (`overview`, `settings`, `update_settings`, `collector_health`, `rescan`, ...):
+//! period boundaries are *local* calendar periods (data is stored in UTC), custom ranges are validated, and a
+//! database that was damaged and rebuilt is reported instead of being silent.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};

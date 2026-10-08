@@ -1,8 +1,8 @@
-//! A faithful port of the old web UI's look (`src/styles/*.css` of the Tauri app) to egui.
+//! The app's look as a small kit of egui widgets that behave like the CSS it was designed in.
 //!
-//! Every number in here (sizes, paddings, letter-spacing, shadows) was measured from the real React components rendered
-//! in a browser (`/reference.html` in the web project), not guessed. The fonts are the web app's own: JetBrains Mono
-//! (400/700/800) and Archivo Black, both SIL OFL (licences are in `assets/fonts`).
+//! Every number in here (sizes, paddings, letter-spacing, shadows) was measured from a browser rendering of the
+//! original design, not guessed. The fonts are JetBrains Mono (400/700/800) and Archivo Black, both SIL OFL
+//! (licences are in `assets/fonts`).
 
 pub mod all_agents;
 pub mod fmt;

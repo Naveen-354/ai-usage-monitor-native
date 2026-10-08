@@ -17,7 +17,8 @@ use ai_usage_monitor_core::api::Config;
 use native_platform::platform::tray::{TrayAction, TrayState};
 use native_ui::expanded::Page;
 
-/// Own folder, deliberately NOT the Tauri app's (`dev.aiusage.monitor`): two apps must never write to one SQLite file.
+/// Own folder, deliberately NOT `dev.aiusage.monitor` (the folder the earlier build of this app used): two builds must
+/// never write to one SQLite file.
 const DATA_DIR_NAME: &str = "dev.aiusage.monitor.native";
 
 #[derive(Debug, Default, PartialEq)]
@@ -211,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_data_folder_is_never_the_tauri_apps_folder() {
+    fn the_default_data_folder_is_never_the_earlier_builds_folder() {
         let d = data_dir(&Args::default());
         assert!(d.ends_with(DATA_DIR_NAME));
         assert!(!d.ends_with("dev.aiusage.monitor"));

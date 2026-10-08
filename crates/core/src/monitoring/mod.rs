@@ -25,7 +25,7 @@ use crate::model::{AgentId, Availability, CollectorHealth};
 use crate::settings::SettingsStore;
 use watch::Watcher;
 
-/// How the monitor tells the UI "numbers changed". The app implements it with a Tauri event;
+/// How the monitor tells the UI "numbers changed". The facade (`api.rs`) implements it with a channel to subscribers;
 /// tests use a counter.
 pub trait Notifier: Send + Sync {
     fn usage_updated(&self);

@@ -5,7 +5,6 @@ pub use app_api::{mock, view};
 pub mod diagnostics;
 pub mod expanded;
 pub mod motion;
-pub mod privacy;
 pub mod settings;
 pub mod statistics;
 pub mod theme;

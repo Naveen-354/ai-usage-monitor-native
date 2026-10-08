@@ -1,6 +1,6 @@
 //! Conversions between the backend's JSON-shaped types (`core`) and the UI's view types (`app-api::view`).
 //!
-//! Both sides serialise to the same camelCase shapes (the former Tauri DTOs), so converting through
+//! Both sides serialise to the same camelCase JSON shapes, so converting through
 //! `serde_json::Value` is exact, and any drift between the two fails loudly in the tests below instead of
 //! silently showing wrong numbers.
 
