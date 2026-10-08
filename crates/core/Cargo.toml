@@ -1,0 +1,32 @@
+﻿[package]
+name = "ai_usage_monitor_core"
+version = "0.1.0"
+description = "Local-first token usage monitor for AI coding agents"
+edition = "2021"
+rust-version = "1.80"
+publish = false
+
+[lib]
+name = "ai_usage_monitor_core"
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# SQLite is compiled in so behaviour is identical on every OS and no system library is required.
+rusqlite = { version = "0.40", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+tracing-appender = "0.2"
+dirs = "7"
+# Filesystem watching (stable 8.x line; 9.0 is only a release candidate).
+notify = "8"
+
+[target.'cfg(windows)'.dependencies]
+# Bindings only (no runtime): used to show the overlay without stealing focus and to read back WS_EX_TOPMOST.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,12 @@
+/target
+
+# Local data and scratch
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+
+# Never commit captured agent data
+**/real-data/
