@@ -29,6 +29,25 @@ pub fn corner_position(area: Area, corner: Corner, w: f32, h: f32) -> (f32, f32)
     }
 }
 
+/// Moves a `w` x `h` window just far enough that all of it lies inside `area`. A window larger than the area is pinned to
+/// its top-left corner (the part that matters is the top).
+pub fn clamp_into(area: Area, x: f32, y: f32, w: f32, h: f32) -> (f32, f32) {
+    let cx = x.min(area.x + area.w - w).max(area.x);
+    let cy = y.min(area.y + area.h - h).max(area.y);
+    (cx, cy)
+}
+
+/// Where a window at `pos` of size `old` goes when it becomes `new` sized: it grows and shrinks around the screen corner it
+/// is nearest to (so a window in the bottom-right corner opens up and to the left, not off the screen), then is clamped so
+/// all of it stays visible. Shrinking again with the same rule returns it to where it started.
+pub fn resized_position(area: Area, pos: (f32, f32), old: (f32, f32), new: (f32, f32)) -> (f32, f32) {
+    let right = pos.0 + old.0 / 2.0 > area.x + area.w / 2.0;
+    let bottom = pos.1 + old.1 / 2.0 > area.y + area.h / 2.0;
+    let x = if right { pos.0 + old.0 - new.0 } else { pos.0 };
+    let y = if bottom { pos.1 + old.1 - new.1 } else { pos.1 };
+    clamp_into(area, x, y, new.0, new.1)
+}
+
 /// Keeps a saved position usable: if the window would be (almost) entirely off the screen, it is not.
 pub fn is_on_screen(x: f32, y: f32, w: f32, h: f32, area: Area) -> bool {
     let visible_w = (x + w).min(area.x + area.w) - x.max(area.x);
@@ -66,6 +85,59 @@ mod tests {
     fn a_second_monitor_to_the_left_is_handled_by_its_own_origin() {
         let area = Area { x: -1920.0, y: 0.0, w: 1920.0, h: 1080.0 };
         assert_eq!(corner_position(area, Corner::TopLeft, 100.0, 100.0), (-1904.0, 16.0));
+    }
+
+    #[test]
+    fn a_window_in_the_bottom_right_corner_expands_up_and_to_the_left() {
+        // The reported bug: the compact overlay in the bottom-right corner, clicked open, hung off the screen.
+        let area = Area { x: 0.0, y: 0.0, w: 1920.0, h: 1040.0 };
+        let compact = (236.0, 208.0);
+        let expanded = (480.0, 680.0);
+        let corner = corner_position(area, Corner::BottomRight, compact.0, compact.1);
+        let (x, y) = resized_position(area, corner, compact, expanded);
+        assert_eq!((x, y), (1424.0, 344.0));
+        assert!(x + expanded.0 <= area.x + area.w && y + expanded.1 <= area.y + area.h, "fully on the screen");
+        // ... and collapsing again puts it exactly back.
+        assert_eq!(resized_position(area, (x, y), expanded, compact), corner);
+    }
+
+    #[test]
+    fn a_window_in_the_top_left_corner_keeps_its_corner() {
+        let area = Area { x: 0.0, y: 0.0, w: 1920.0, h: 1040.0 };
+        assert_eq!(resized_position(area, (16.0, 16.0), (236.0, 208.0), (480.0, 680.0)), (16.0, 16.0));
+    }
+
+    #[test]
+    fn the_nearest_corner_is_judged_on_each_axis_separately() {
+        let area = Area { x: 0.0, y: 0.0, w: 1920.0, h: 1040.0 };
+        // top right: the right edge stays, the top stays
+        assert_eq!(resized_position(area, (1668.0, 16.0), (236.0, 208.0), (480.0, 680.0)), (1424.0, 16.0));
+        // bottom left: the left edge stays, the bottom stays
+        assert_eq!(resized_position(area, (16.0, 816.0), (236.0, 208.0), (480.0, 680.0)), (16.0, 344.0));
+    }
+
+    #[test]
+    fn a_window_on_a_second_monitor_is_judged_against_that_monitor() {
+        let left_screen = Area { x: -1920.0, y: 0.0, w: 1920.0, h: 1080.0 };
+        // bottom-right of the LEFT monitor
+        let corner = corner_position(left_screen, Corner::BottomRight, 236.0, 208.0);
+        let (x, y) = resized_position(left_screen, corner, (236.0, 208.0), (480.0, 680.0));
+        assert!(x >= left_screen.x && x + 480.0 <= left_screen.x + left_screen.w, "x = {x}");
+        assert!(y >= left_screen.y && y + 680.0 <= left_screen.y + left_screen.h, "y = {y}");
+    }
+
+    #[test]
+    fn clamping_pulls_a_hanging_window_back_and_leaves_a_fitting_one_alone() {
+        let area = Area { x: 0.0, y: 0.0, w: 1920.0, h: 1040.0 };
+        assert_eq!(clamp_into(area, 1739.0, 829.0, 480.0, 680.0), (1440.0, 360.0));
+        assert_eq!(clamp_into(area, 100.0, 100.0, 480.0, 680.0), (100.0, 100.0));
+        assert_eq!(clamp_into(area, -50.0, -20.0, 480.0, 680.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_window_taller_than_the_screen_is_pinned_to_the_top() {
+        let small = Area { x: 0.0, y: 0.0, w: 1366.0, h: 600.0 };
+        assert_eq!(clamp_into(small, 500.0, 300.0, 480.0, 680.0), (500.0, 0.0));
     }
 
     #[test]

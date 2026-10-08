@@ -310,6 +310,8 @@ impl App {
         }
         let want = self.window_size(settings);
         if self.applied_size != Some(want) {
+            // Resize around the nearest screen corner first, so an overlay in the bottom-right opens up and to the left.
+            self.keep_on_screen_when_resized(ctx, want);
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(want.0, want.1)));
             self.applied_size = Some(want);
         }
@@ -337,22 +339,67 @@ impl App {
         ctx.input(|i| i.viewport().monitor_size).map(|m| Area { x: 0.0, y: 0.0, w: m.x, h: m.y })
     }
 
+    /// The usable desktop of the monitor that holds the rectangle `x, y, w, h` (points), falling back to the primary
+    /// monitor's. A saved spot on a second monitor must be judged against that monitor, not against the primary one.
+    fn work_area_for(&self, ctx: &egui::Context, x: f32, y: f32, w: f32, h: f32) -> Option<Area> {
+        let ppp = ctx.pixels_per_point();
+        let px = |v: f32| (v * ppp).round() as i32;
+        match overlay_window::work_area_near(px(x), px(y), px(w), px(h)) {
+            Some((ax, ay, aw, ah)) => Some(Area { x: ax as f32 / ppp, y: ay as f32 / ppp, w: aw as f32 / ppp, h: ah as f32 / ppp }),
+            None => self.work_area(ctx),
+        }
+    }
+
+    /// Moves the overlay and remembers the spot as its position without touching the "Overlay position" setting (a move the
+    /// app makes itself is not the user dragging the window).
+    fn move_overlay(&mut self, ctx: &egui::Context, x: f32, y: f32) {
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, y)));
+        let spot = (x.round() as i32, y.round() as i32);
+        self.saved_pos = Some(spot);
+        self.pending_pos = None;
+        self.patch_json(serde_json::json!({"overlayX": spot.0, "overlayY": spot.1}));
+    }
+
+    /// The overlay is about to become `new_size`: grow or shrink it around the screen corner it is nearest to and keep all of
+    /// it visible, instead of letting it grow down and to the right off the screen.
+    fn keep_on_screen_when_resized(&mut self, ctx: &egui::Context, new_size: (f32, f32)) {
+        let (outer, minimized) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().minimized.unwrap_or(false)));
+        let Some(r) = outer else { return };
+        if minimized || r.min.x < -10_000.0 || r.min.y < -10_000.0 {
+            return; // a minimised window reports a parking position
+        }
+        let Some(area) = self.work_area_for(ctx, r.min.x, r.min.y, r.width(), r.height()) else { return };
+        let (x, y) = placement::resized_position(area, (r.min.x, r.min.y), (r.width(), r.height()), new_size);
+        if (x - r.min.x).abs() > 0.5 || (y - r.min.y).abs() > 0.5 {
+            self.move_overlay(ctx, x, y);
+        }
+    }
+
     /// Puts the overlay in its corner on first launch (or when the saved spot is off every screen) and whenever the
     /// "Overlay position" setting changes; a dragged position (`Custom`) is left alone.
     fn sync_placement(&mut self, ctx: &egui::Context, settings: &Settings) {
-        let Some(area) = self.work_area(ctx) else { return };
+        let Some(primary) = self.work_area(ctx) else { return };
         let (w, h) = self.window_size(settings);
         let saved = settings.overlay_x.zip(settings.overlay_y);
-        let usable = saved.is_some_and(|(x, y)| placement::is_on_screen(x as f32, y as f32, w, h, area));
+        // The saved spot is judged against the monitor it is on, so a window left on a second monitor stays there.
+        let saved_area = saved.and_then(|(x, y)| self.work_area_for(ctx, x as f32, y as f32, w, h));
+        let usable = saved.zip(saved_area).is_some_and(|((x, y), a)| placement::is_on_screen(x as f32, y as f32, w, h, a));
         if self.placed_corner.is_none() {
-            // First look at the settings: a saved spot that is still on a screen always wins over the corner setting.
-            if usable {
+            // First look at the settings: a saved spot that is still on a screen always wins over the corner setting ...
+            if let (true, Some((x, y)), Some(area)) = (usable, saved, saved_area) {
                 self.placed_corner = Some(settings.overlay_corner);
+                // ... but all of the window must be visible at the size it has now (an expanded window saved at the spot of a
+                // compact one would otherwise hang off the screen).
+                let (cx, cy) = placement::clamp_into(area, x as f32, y as f32, w, h);
+                if (cx - x as f32).abs() > 0.5 || (cy - y as f32).abs() > 0.5 {
+                    self.move_overlay(ctx, cx, cy);
+                }
                 return;
             }
         } else if settings.overlay_corner == Corner::Custom || self.placed_corner == Some(settings.overlay_corner) {
             return; // nothing new to do: either a dragged position or the corner it is already in
-        }        let (x, y) = placement::corner_position(area, settings.overlay_corner, w, h);
+        }
+        let (x, y) = placement::corner_position(primary, settings.overlay_corner, w, h);
         ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(x, y)));
         self.placed_corner = Some(settings.overlay_corner);
         self.saved_pos = Some((x.round() as i32, y.round() as i32));

@@ -30,6 +30,32 @@ pub fn work_area() -> Option<(i32, i32, i32, i32)> {
     }
 }
 
+/// The usable area (monitor minus taskbar) of the monitor that holds the physical-pixel rectangle `x, y, w, h` - or, if
+/// it is on none of them, the nearest one - as (x, y, w, h). This is what keeps a window on the screen it is actually on
+/// instead of the primary one.
+pub fn work_area_near(x: i32, y: i32, w: i32, h: i32) -> Option<(i32, i32, i32, i32)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        let zero = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let probe = RECT { left: x, top: y, right: x + w.max(1), bottom: y + h.max(1) };
+        // SAFETY: `probe` outlives the call; MONITOR_DEFAULTTONEAREST always yields a monitor when any is attached.
+        let monitor = unsafe { MonitorFromRect(&probe, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            return None;
+        }
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, rcMonitor: zero, rcWork: zero, dwFlags: 0 };
+        // SAFETY: `info.cbSize` is set as the API requires, and the pointer is to a live MONITORINFO.
+        let ok = unsafe { GetMonitorInfoW(monitor, &mut info) };
+        (ok != 0).then_some((info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (x, y, w, h);
+        None
+    }
+}
+
 pub fn show_no_activate(hwnd: *mut std::ffi::c_void) {
     #[cfg(windows)]
     {
@@ -127,4 +153,19 @@ pub fn get_window_rect(hwnd: *mut std::ffi::c_void) -> Option<WindowRect> {
     }
     #[cfg(not(windows))]
     { None }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_work_area_of_the_monitor_near_a_rectangle_is_a_real_area() {
+        // Needs an attached monitor, like every Windows desktop session this suite runs in.
+        let Some((_, _, w, h)) = work_area_near(10, 10, 200, 200) else { return };
+        assert!(w > 200 && h > 200, "{w} x {h}");
+        // A rectangle far outside every screen still resolves to the nearest monitor instead of failing.
+        let far = work_area_near(900_000, 900_000, 200, 200).expect("nearest monitor");
+        assert!(far.2 > 200 && far.3 > 200);
+    }
 }

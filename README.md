@@ -98,12 +98,15 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 ## Verified (by running it, not by reading it)
 
-* `cargo test --workspace`: 420 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
+* `cargo test --workspace`: 427 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
   `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 * Real data end to end: the overlay, expanded view, Settings, Diagnostics and Privacy pages show the real counts; per-collector
   numbers match independent checks made against the agents' own files (e.g. Gemini 1,812 events).
 * Local-time periods (the facade originally used UTC; a regression test now pins "today starts at local midnight").
 * Transparent, frameless, always-on-top window (Win32 `WS_EX_TOPMOST` read back); position and compact/expanded mode persist.
+* Expanding and collapsing keeps the overlay on screen: it grows and shrinks around the screen corner it is nearest to (a bottom-right
+  overlay opens up and to the left) and is clamped into the work area of *its own* monitor. Measured on a real window in all four
+  corners, and when the app restarts while expanded; each collapses back to exactly where it started.
 * Hide -> tray -> show round trip works (this found and fixed a real bug: a hidden window runs no frame loop, so it is now
   restored through Windows directly). Single-instance guard works.
 * A damaged database is set aside and rebuilt, and the notice reaches Diagnostics.
