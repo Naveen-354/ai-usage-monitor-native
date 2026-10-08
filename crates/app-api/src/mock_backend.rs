@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use crate::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use crate::view::{AppInfo, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use crate::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
 use crate::mock;
 
 pub struct MockBackend {
@@ -65,6 +65,11 @@ impl Backend for MockBackend {
     fn history(&self, period: PeriodOrCustom, _from: Option<String>, _to: Option<String>) -> Result<History, BackendError> {
         self.check_fail()?;
         Ok(mock::history(period))
+    }
+
+    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
+        self.check_fail()?;
+        Ok(mock::daily_totals(mock::today(), days))
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {

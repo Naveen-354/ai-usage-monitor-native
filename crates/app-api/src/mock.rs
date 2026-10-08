@@ -1,6 +1,8 @@
 //! Deterministic synthetic data for previews and tests. **Identical in every agent's copy - do not edit.**
 //! Nothing here reads a real agent, file or database.
 
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
+
 use crate::view::*;
 
 pub const NOW_MS: i64 = 1_760_000_000_000;
@@ -124,6 +126,48 @@ pub fn diagnostics() -> OverlayDiagnostics {
     }
 }
 
+/// The day the fixture's `NOW_MS` falls on (UTC).
+pub fn today() -> NaiveDate {
+    chrono::DateTime::from_timestamp_millis(NOW_MS).expect("NOW_MS is a valid time").date_naive()
+}
+
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// Synthetic activity for the heat map: the `days` days ending at `today`, ascending, only days with usage. It has the
+/// rhythm of real work (quiet weekends, idle days, busy and slow weeks, more recent activity) and is repeatable; today
+/// equals the fixture overview's own total, so the Statistics page agrees with itself.
+pub fn daily_totals(today: NaiveDate, days: u32) -> Vec<DayTotal> {
+    let today_total = overview().totals.map(|t| t.total).unwrap_or(0);
+    let mut out = Vec::new();
+    for back in (0..days).rev() {
+        let date = today - Duration::days(i64::from(back));
+        let total = if back == 0 { today_total } else { synthetic_day(back, date) };
+        if total > 0 {
+            out.push(DayTotal { date: date.format("%Y-%m-%d").to_string(), total });
+        }
+    }
+    out
+}
+
+fn synthetic_day(back: u32, date: NaiveDate) -> u64 {
+    let h = splitmix64(u64::from(back));
+    let weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
+    if h % 100 < if weekend { 45 } else { 12 } {
+        return 0; // an idle day
+    }
+    let u = ((h >> 8) % 10_000) as f64 / 10_000.0;
+    let magnitude = 80_000.0 * 3_750f64.powf(u); // 80K ..= 300M, log-uniform
+    let week = f64::from(back / 7);
+    let busy = 0.45 + 0.55 * ((week * 0.7).sin() + 1.0) / 2.0; // busy and slow weeks
+    let recent = 0.3 + 0.7 * (1.0 - f64::from(back.min(371)) / 371.0); // older days were lighter
+    (magnitude * busy * recent).max(1.0) as u64
+}
+
 /// `n` gap-free buckets of `bucket_ms` ending at NOW_MS, with a repeatable pseudo-random shape.
 pub fn history(period: PeriodOrCustom) -> History {
     let (n, bucket_ms): (usize, i64) = match period {
@@ -188,6 +232,21 @@ mod tests {
             assert!(h.buckets.windows(2).all(|w| w[0].end_utc_ms == w[1].start_utc_ms));
             assert!(h.buckets.iter().all(|b| b.by_agent.iter().map(|(_, v)| v).sum::<u64>() == b.total));
         }
+    }
+
+    #[test]
+    fn the_fixture_heat_map_is_ascending_repeatable_and_ends_with_the_days_own_total() {
+        let today = today();
+        let days = daily_totals(today, 371);
+        assert!(days.len() > 150 && days.len() < 371, "some idle days, mostly busy ones: {}", days.len());
+        assert!(days.windows(2).all(|w| w[0].date < w[1].date), "ascending, no duplicates");
+        assert!(days.iter().all(|d| d.total > 0), "only days with usage are listed");
+        let last = days.last().unwrap();
+        assert_eq!(last.date, today.format("%Y-%m-%d").to_string());
+        assert_eq!(Some(last.total), overview().totals.map(|t| t.total), "the Statistics page must agree with itself");
+        assert_eq!(days, daily_totals(today, 371), "repeatable");
+        assert_eq!(daily_totals(today, 1).len(), 1);
+        assert!(daily_totals(today, 0).is_empty());
     }
 
     #[test]

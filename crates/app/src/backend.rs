@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use ai_usage_monitor_core::aggregation::Period;
 use ai_usage_monitor_core::api::{Config, Core, CoreEvent};
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use app_api::view::{AppInfo, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
 
 use crate::bridge;
 
@@ -184,6 +184,13 @@ impl Backend for CoreBackend {
 
     fn history(&self, _period: PeriodOrCustom, _from: Option<String>, _to: Option<String>) -> Result<History, BackendError> {
         Err(not_yet("the history timeline"))
+    }
+
+    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
+        self.with_core(|c| {
+            let days = c.daily_totals(days).map_err(err)?;
+            bridge::convert(&days).map_err(BackendError::Message)
+        })
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {
@@ -373,6 +380,17 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_backend_has_no_active_days_and_the_list_converts_to_the_view_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        assert!(b.daily_totals(371).unwrap().is_empty());
+        let core_days = vec![ai_usage_monitor_core::aggregation::DayTotal { date: chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap(), total: 42 }];
+        let view: Vec<app_api::view::DayTotal> = bridge::convert(&core_days).unwrap();
+        assert_eq!(view, vec![app_api::view::DayTotal { date: "2026-10-08".into(), total: 42 }]);
+        b.shutdown();
+    }
+
+    #[test]
     fn quit_sets_a_flag_and_shutdown_makes_later_calls_fail_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         let b = backend(&dir);
@@ -381,6 +399,7 @@ mod tests {
         assert!(b.quit_requested());
         b.shutdown();
         assert!(b.settings().is_err());
+        assert!(b.daily_totals(371).is_err());
         b.shutdown(); // idempotent
     }
 

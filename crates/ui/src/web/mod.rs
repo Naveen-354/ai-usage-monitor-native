@@ -7,6 +7,7 @@
 pub mod all_agents;
 pub mod fmt;
 pub mod fonts;
+pub mod heatmap;
 pub mod hero;
 pub mod pages;
 pub mod paint;

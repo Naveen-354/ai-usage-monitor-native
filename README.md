@@ -98,12 +98,17 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 ## Verified (by running it, not by reading it)
 
-* `cargo test --workspace`: 427 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
+* `cargo test --workspace`: 452 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
   `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 * Real data end to end: the overlay, expanded view, Settings, Diagnostics and Privacy pages show the real counts; per-collector
   numbers match independent checks made against the agents' own files (e.g. Gemini 1,812 events).
 * Local-time periods (the facade originally used UTC; a regression test now pins "today starts at local midnight").
 * Transparent, frameless, always-on-top window (Win32 `WS_EX_TOPMOST` read back); position and compact/expanded mode persist.
+* The Statistics page opens with an activity heat map in the style of GitHub's contribution graph: one square per local day for the past
+  year, a column per week (the "week starts on" setting decides the first row), month and weekday names, a Less/More legend and a hover
+  box with the day's total. Levels are quartiles of the days that had usage, so one huge day does not wash out the rest. It is built from
+  the same 15-minute rollup and the same rules as the totals (enabled agents only, cached tokens only if "count cached tokens" is on).
+  Checked on fixture data and on a real import of the agents' history; when the days cannot be read it says TOKEN DATA UNAVAILABLE, never zeros.
 * Expanding and collapsing keeps the overlay on screen: it grows and shrinks around the screen corner it is nearest to (a bottom-right
   overlay opens up and to the left) and is clamped into the work area of *its own* monitor. Measured on a real window in all four
   corners, and when the app restarts while expanded; each collapses back to exactly where it started.
@@ -113,8 +118,8 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 ## Not done / not verified
 
-* **History charts:** the Statistics page is the per-agent breakdown (no charts). The core has no history query, and the
-  first-generation `statistics` module (charts) is not shown anywhere. Also not implemented: JSON/CSV export, clear history, custom data location.
+* **Timeline charts:** the Statistics page is the activity heat map plus the per-agent breakdown. The core has no timeline/by-model/by-project
+  query, and the first-generation `statistics` module (charts) is not shown anywhere. Also not implemented: JSON/CSV export, clear history, custom data location.
 * **Light theme:** built from the same tokens, but only the dark theme was compared against the browser rendering.
 * The tray menu was exercised through its event path, not by right-clicking it; the global hotkeys' key mapping is tested but no key was pressed;
   start-with-system is wired but was never toggled on a real machine (it writes a start-up entry), and the Settings page has no row for it

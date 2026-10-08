@@ -20,6 +20,7 @@ use native_ui::motion::counter::AnimatedCounter;
 use native_ui::motion::format::{format_compact, panel_alpha, platform_alpha_floor};
 use native_ui::theme;
 use native_ui::web::all_agents::{self, Action as AgentsAction};
+use native_ui::web::heatmap;
 use native_ui::web::hero::{self, Body, HERO_DIGITS};
 use native_ui::web::pages::{self, DiagnosticsData};
 use native_ui::web::{with_alpha, Tokens};
@@ -33,6 +34,8 @@ use crate::shell::{HotkeyKind, OverlayShared, Shell, ShellEvent};
 
 const EXPANDED_SIZE: (f32, f32) = (480.0, 680.0);
 const POSITION_SAVE_DELAY: Duration = Duration::from_millis(700);
+/// How often the Statistics page re-reads the daily totals behind its heat map while it is open.
+const HEATMAP_REFRESH: Duration = Duration::from_secs(10);
 const STEPPED_PULSE: Duration = Duration::from_millis(500);
 /// How long the floating +756K label animates (delta-float, 1.6 s).
 const FLOATER_MS: f32 = 1600.0;
@@ -99,9 +102,19 @@ pub struct App {
     /// The corner the overlay was last placed in (so a changed setting moves it, but a drag does not fight it).
     placed_corner: Option<Corner>,
     saved_pos: Option<(i32, i32)>,
+    heat: Option<HeatCache>,
     pending_pos: Option<(Instant, (i32, i32))>,
     last_diag: Instant,
     started: Instant,
+}
+
+/// The daily totals the heat map draws, and what they were read for.
+struct HeatCache {
+    at: Instant,
+    /// The settings that change what is counted; a change re-reads at once.
+    key: (bool, Vec<String>),
+    /// `None` = they could not be read (the page then says so instead of drawing zeros).
+    days: Option<Vec<view::DayTotal>>,
 }
 
 impl App {
@@ -142,6 +155,7 @@ impl App {
             applied_on_top: None,
             placed_corner: None,
             saved_pos,
+            heat: None,
             pending_pos: None,
             last_diag: Instant::now() - Duration::from_secs(10),
             started: Instant::now(),
@@ -701,7 +715,24 @@ impl App {
         }
     }
 
+    /// Reads the daily totals for the heat map: when the Statistics page is first shown, then at most every few seconds,
+    /// and at once when a setting that changes what is counted (enabled agents, cached tokens) changes.
+    fn refresh_heatmap(&mut self, ctx: &egui::Context, settings: &Settings) {
+        let key = (settings.count_cached_in_total, settings.enabled_agents.clone());
+        if self.heat.as_ref().is_some_and(|h| h.key == key && h.at.elapsed() < HEATMAP_REFRESH) {
+            return;
+        }
+        let days = self.backend.daily_totals(heatmap::DAYS).ok();
+        self.heat = Some(HeatCache { at: Instant::now(), key, days });
+        ctx.request_repaint_after(HEATMAP_REFRESH);
+    }
+
     fn main_window(&mut self, ctx: &egui::Context, settings: &Settings) {
+        if self.main.page == Page::Statistics {
+            self.refresh_heatmap(ctx, settings);
+        }
+        let heat_days: Option<Vec<view::DayTotal>> = self.heat.as_ref().and_then(|h| h.days.clone());
+        let today = chrono::Local::now().date_naive();
         let t = Tokens::for_theme(settings.theme);
         let mut page = self.main.page;
         let mut close = false;
@@ -738,6 +769,17 @@ impl App {
                 }
                 scroll.show(ui, |ui| match page {
                     Page::Statistics => pages::page(ui, |ui| {
+                        heatmap::show(
+                            ui,
+                            &heatmap::Props {
+                                tokens: t,
+                                days: heat_days.as_deref(),
+                                has_numbers: overview.as_ref().is_some_and(|o| o.totals.is_some()),
+                                today,
+                                week_start: settings.week_starts_on,
+                            },
+                        );
+                        ui.add_space(24.0);
                         let props = all_agents::Props { tokens: t, overview: overview.as_ref(), settings, now_ms, time_ms, hide_headline: false };
                         for a in all_agents::show(ui, &props) {
                             if let AgentsAction::Period(p) = a {

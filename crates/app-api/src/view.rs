@@ -197,6 +197,15 @@ pub struct TimelineBucket {
     pub by_agent: Vec<(String, u64)>,
 }
 
+/// Tokens used on one local calendar day, for the activity heat map. `date` is `YYYY-MM-DD`. Only days that had usage are
+/// listed: a day that is missing had none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DayTotal {
+    pub date: String,
+    pub total: u64,
+}
+
 /// History for the Statistics page. `buckets` is ascending by time and gap-free (empty buckets have total 0).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
 use app_api::mock;
-use app_api::view::{AppInfo, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
 use serde_json::Value;
 
 use crate::backend::AppBackend;
@@ -94,6 +94,10 @@ impl Backend for DemoBackend {
 
     fn history(&self, period: PeriodOrCustom, _from: Option<String>, _to: Option<String>) -> Result<History, BackendError> {
         Ok(mock::history(period))
+    }
+
+    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
+        Ok(mock::daily_totals(chrono::Local::now().date_naive(), days))
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {

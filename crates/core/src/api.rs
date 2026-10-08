@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Local, NaiveDate, Utc};
 
-use crate::aggregation::{build_overview, custom_range, range_for, Overview, Period};
+use crate::aggregation::{self, build_overview, custom_range, range_for, DayTotal, Overview, Period};
 use crate::collectors::{self, Env};
 use crate::database::{queries, Database};
 use crate::error::{AppError, Result};
@@ -106,6 +106,14 @@ impl Core {
             overview.importing_agents = sup.importing_agents();
         }
         Ok(overview)
+    }
+
+    /// One total per local calendar day for the `days` days up to and including today, only days that had usage
+    /// (see [`daily_totals`]); this is what the Statistics page's activity heat map draws.
+    pub fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>> {
+        let settings = self.settings.get();
+        let today = Local::now().date_naive();
+        self.db.with_reader(|c| aggregation::daily_totals(c, &settings, &Local, today, days))
     }
 
     pub fn settings(&self) -> Settings {
@@ -226,6 +234,37 @@ mod tests {
         let core = core_in(&dir);
         assert!(core.database_notice().is_some(), "the user must be told the database was rebuilt");
         assert!(core.overview(Period::Day, None, None).is_ok());
+        core.shutdown();
+    }
+
+    #[test]
+    fn daily_totals_show_ingested_usage_on_todays_local_date() {
+        use crate::database::Batch;
+        use crate::model::{Accuracy, UsageEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let core = core_in(&dir);
+        assert!(core.daily_totals(371).unwrap().is_empty(), "no usage yet means no entries, not zeros");
+        let now = Utc::now();
+        let event = UsageEvent {
+            agent: "claude",
+            model: "m".into(),
+            ts_utc_ms: now.timestamp_millis(),
+            input_tokens: 100,
+            output_tokens: 10,
+            cache_read_tokens: 50,
+            cache_write_tokens: 0,
+            reasoning_tokens: None,
+            session_id: None,
+            project: None,
+            source: "t",
+            accuracy: Accuracy::Real,
+            dedupe_key: "k".into(),
+        };
+        core.db.commit(&Batch { agent: "claude", events: vec![event], cursors: vec![] }).unwrap();
+        let got = core.daily_totals(371).unwrap();
+        assert_eq!(got, vec![DayTotal { date: now.with_timezone(&Local).date_naive(), total: 160 }]);
+        core.update_settings(&serde_json::json!({"countCachedInTotal": false})).unwrap();
+        assert_eq!(core.daily_totals(371).unwrap()[0].total, 110, "the heat map follows the cached-tokens setting like the totals do");
         core.shutdown();
     }
 
