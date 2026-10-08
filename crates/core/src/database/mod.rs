@@ -71,6 +71,26 @@ fn verify(conn: &Connection, path: &Path) -> Result<()> {
     )))
 }
 
+/// Before a database that already holds history is upgraded to a newer schema, a consistent snapshot of it is kept next to it
+/// (`usage.db.v1.bak` for a version-1 file). The upgrade is itself transactional and lossless, but an older build cannot read
+/// a newer file, and a user who goes back should find their history exactly as it was. Never fatal: a failure is logged and the
+/// upgrade carries on. One snapshot per old version is kept, and an existing one is never overwritten.
+fn backup_before_upgrade(conn: &Connection, path: &Path) {
+    let Ok(version) = migrate::current_version(conn) else { return };
+    if version == 0 || version >= LATEST_VERSION {
+        return; // a brand-new file, or already current
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "usage.db".into());
+    let backup = path.with_file_name(format!("{name}.v{version}.bak"));
+    if backup.exists() {
+        return;
+    }
+    match conn.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()]) {
+        Ok(_) => tracing::info!(from = version, "kept a copy of the database before upgrading it"),
+        Err(e) => tracing::warn!("could not keep a copy of the database before upgrading it: {e}"),
+    }
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Arc<Database>> {
         Self::open_with_report(path).map(|(db, _)| db)
@@ -107,6 +127,7 @@ impl Database {
         let mut conn = Connection::open(path)?;
         configure(&conn)?;
         verify(&conn, path)?;
+        backup_before_upgrade(&conn, path);
         migrate::migrate(&mut conn)?;
         writer::ensure_agents(&conn)?;
 
@@ -203,5 +224,53 @@ mod concurrency_tests {
                 assert_eq!(version, LATEST_VERSION);
             }
         }
+    }
+
+    /// A database written by the previous release is upgraded, and a snapshot of it as it was is kept.
+    #[test]
+    fn upgrading_an_existing_database_keeps_a_snapshot_of_it_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../migrations/0001_init.sql")).unwrap();
+            c.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_utc_ms INTEGER NOT NULL); INSERT INTO schema_migrations VALUES (1, 'init', 0);").unwrap();
+            c.execute("INSERT INTO agents (id, display_name) VALUES ('codex', 'Codex')", []).unwrap();
+            c.execute("INSERT INTO models (id, agent_id, name) VALUES (1, 'codex', 'm')", []).unwrap();
+            c.execute(
+                "INSERT INTO usage_events (dedupe_key, agent_id, model_id, ts_utc_ms, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, accuracy, source)
+                 VALUES ('k', 'codex', 1, 1000, 42, 0, 0, 0, 'actual', 's')",
+                [],
+            )
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        let version: i64 = db.with_reader(|c| Ok(c.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(version, LATEST_VERSION, "the real database was upgraded");
+
+        let backup = dir.path().join("usage.db.v1.bak");
+        assert!(backup.is_file(), "a snapshot was kept");
+        let old = Connection::open(&backup).unwrap();
+        let (v, tokens): (i64, i64) = old
+            .query_row("SELECT (SELECT MAX(version) FROM schema_migrations), (SELECT SUM(input_tokens) FROM usage_events)", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((v, tokens), (1, 42), "the snapshot is the old schema with the old history");
+        assert!(old.prepare("SELECT account_id FROM usage_events").is_err(), "and it has none of the new columns");
+    }
+
+    #[test]
+    fn no_snapshot_is_made_for_a_new_or_an_already_current_database_and_an_existing_one_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("usage.db");
+        drop(Database::open(&path).unwrap()); // brand new
+        drop(Database::open(&path).unwrap()); // already current
+        assert!(std::fs::read_dir(dir.path()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".bak")));
+        // an existing snapshot is never overwritten
+        let bak = dir.path().join("usage.db.v1.bak");
+        std::fs::write(&bak, b"precious").unwrap();
+        let c = Connection::open(dir.path().join("old.db")).unwrap();
+        c.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_utc_ms INTEGER NOT NULL); INSERT INTO schema_migrations VALUES (1, 'init', 0);").unwrap();
+        backup_before_upgrade(&c, &dir.path().join("usage.db"));
+        assert_eq!(std::fs::read(&bak).unwrap(), b"precious");
     }
 }

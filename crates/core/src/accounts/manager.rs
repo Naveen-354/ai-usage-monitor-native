@@ -32,6 +32,10 @@ use crate::model::{catalog, DEFAULT_ACCOUNT};
 /// What we say about an account that runs on an API key we hold.
 const API_KEY_NOTE: &str = "API key stored in the OS credential store; it is not checked until used";
 
+/// How long a sign-in may stay unfinished before start-up treats it as abandoned. A sign-in that is genuinely in progress in
+/// another window (or another process) is "pending" too, and must never be cleaned up from under the person doing it.
+const PENDING_GRACE: Duration = Duration::from_secs(30 * 60);
+
 /// How long to wait for an agent's status command.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -100,6 +104,7 @@ pub struct AccountManager {
     env: Env,
     data_dir: PathBuf,
     lock_wait: Duration,
+    pending_grace: Duration,
 }
 
 impl AccountManager {
@@ -115,7 +120,13 @@ impl AccountManager {
         env: Env,
         data_dir: PathBuf,
     ) -> AccountManager {
-        AccountManager { store, providers: by_id(providers), runner, secrets, env, data_dir, lock_wait: DEFAULT_WAIT }
+        AccountManager { store, providers: by_id(providers), runner, secrets, env, data_dir, lock_wait: DEFAULT_WAIT, pending_grace: PENDING_GRACE }
+    }
+
+    /// For tests: how old an unfinished sign-in must be before start-up settles it.
+    pub fn with_pending_grace(mut self, grace: Duration) -> AccountManager {
+        self.pending_grace = grace;
+        self
     }
 
     /// The manager over the real machine: the shared database in `data_dir`, the real process runner and the OS credential
@@ -385,9 +396,13 @@ impl AccountManager {
         std::fs::remove_dir_all(dir).is_ok()
     }
 
-    /// Settles sign-ins that were started and never finished (a crash, a closed window).
+    /// Settles sign-ins that were started and never finished (a crash, a closed window) - but only ones that have been pending for
+    /// longer than any sign-in plausibly takes, so one in progress in another process is left alone.
     fn recover_pending(&self) -> AccountResult<()> {
-        for account in self.store.list(None, false)?.into_iter().filter(|a| a.auth == AuthState::Pending) {
+        let now = now_ms();
+        let grace = i64::try_from(self.pending_grace.as_millis()).unwrap_or(i64::MAX);
+        let stale = |a: &Account| a.auth == AuthState::Pending && now.saturating_sub(a.created_utc_ms) >= grace;
+        for account in self.store.list(None, false)?.into_iter().filter(stale) {
             let Ok(p) = self.provider(&account.agent_id) else { continue };
             let _lock = self.lock(&account.agent_id)?;
             match self.observe(p.as_ref(), &account).signed_in {

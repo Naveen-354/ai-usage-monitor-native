@@ -40,7 +40,7 @@ fn fx_with(installed: &[&str]) -> Fx {
     let runner = FakeRunner::new();
     let secrets = Arc::new(MemorySecretStore::new());
     let db = Database::open(&data.join("usage.db")).unwrap();
-    let mgr = AccountManager::new(AccountStore::new(db), runner.clone(), secrets.clone(), env.clone(), data.clone()).with_lock_wait(Duration::from_secs(3));
+    let mgr = AccountManager::new(AccountStore::new(db), runner.clone(), secrets.clone(), env.clone(), data.clone()).with_lock_wait(Duration::from_secs(3)).with_pending_grace(Duration::ZERO);
     mgr.init().unwrap();
     Fx { _dir: dir, data, env, runner, secrets, mgr }
 }
@@ -51,6 +51,12 @@ fn fx() -> Fx {
 
 /// A second manager over the same data folder - what a second process (the CLI next to the app) would be.
 fn second_manager(f: &Fx) -> AccountManager {
+    let db = Database::open(&f.data.join("usage.db")).unwrap();
+    AccountManager::new(AccountStore::new(db), f.runner.clone(), f.secrets.clone(), f.env.clone(), f.data.clone()).with_lock_wait(Duration::from_secs(3)).with_pending_grace(Duration::ZERO)
+}
+
+/// A manager as another process would really start it: with the normal grace period for unfinished sign-ins.
+fn second_manager_with_default_grace(f: &Fx) -> AccountManager {
     let db = Database::open(&f.data.join("usage.db")).unwrap();
     AccountManager::new(AccountStore::new(db), f.runner.clone(), f.secrets.clone(), f.env.clone(), f.data.clone()).with_lock_wait(Duration::from_secs(3))
 }
@@ -722,6 +728,43 @@ fn a_sign_in_interrupted_by_a_crash_is_settled_at_the_next_start() {
     assert_eq!(restarted.store().get("codex", "finished").unwrap().unwrap().auth, AuthState::Valid, "the sign-in did complete: kept");
     assert!(restarted.store().get("claude", "abandoned").unwrap().is_none(), "the one that never completed is cleaned up");
     assert!(!f.data.join("accounts").join("claude").join("abandoned").exists());
+}
+
+#[test]
+fn a_sign_in_in_progress_in_another_process_is_never_cleaned_up_from_under_the_person_doing_it() {
+    // The app starts (or another `agm` command runs) while someone is in the middle of signing in: that account is "pending" too.
+    let f = fx();
+    let plan = f.mgr.plan_login("codex", "Busy", LoginMethod::Standard, None).unwrap();
+    let folder = plan.account.profile_dir.clone().unwrap();
+    std::fs::write(folder.join("home").join(".codex").join("half-written"), b"x").unwrap();
+
+    f.runner.script(Reply::status("login status", 1, "", "Not logged in\n")); // the sign-in has not finished yet
+    let another_process = second_manager_with_default_grace(&f);
+    another_process.init().unwrap();
+    another_process.init().unwrap();
+
+    assert_eq!(f.mgr.store().get("codex", "busy").unwrap().unwrap().auth, AuthState::Pending, "left exactly as it was");
+    assert!(folder.join("home").join(".codex").join("half-written").is_file(), "and its folder untouched");
+    // ... and the person finishes: it works
+    f.runner.script(Reply::status("login status", 0, "Logged in using ChatGPT", ""));
+    let a = f.mgr.finish_login(plan, Ok(0)).unwrap();
+    assert_eq!(a.auth, AuthState::Valid);
+}
+
+#[test]
+fn an_old_unfinished_sign_in_is_settled_even_with_the_normal_grace_period() {
+    let f = fx();
+    let plan = f.mgr.plan_login("codex", "Old", LoginMethod::Standard, None).unwrap();
+    // make it look like it was started two hours ago
+    f.mgr
+        .store()
+        .database()
+        .with_writer(|w| Ok(w.conn.execute("UPDATE accounts SET created_utc_ms = created_utc_ms - 7200000 WHERE agent_id = 'codex' AND account_id = 'old'", [])?))
+        .unwrap();
+    drop(plan);
+    f.runner.script(Reply::status("login status", 1, "", "Not logged in\n"));
+    second_manager_with_default_grace(&f).init().unwrap();
+    assert!(f.mgr.store().get("codex", "old").unwrap().is_none(), "an abandoned sign-in does not linger forever");
 }
 
 #[test]
