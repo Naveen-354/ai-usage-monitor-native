@@ -404,8 +404,13 @@ pub fn collector_rows(agents: &[AgentOverview]) -> Vec<Vec<Cell>> {
         .collect()
 }
 
-pub fn diagnostics_page(ui: &mut Ui, t: &Tokens, d: &DiagnosticsData) {
+/// What the RELOAD AGENTS button does, said under it.
+pub const RELOAD_HINT: &str = "Looks for every supported agent on this computer again, including ones installed since the app started, and reads from what it finds.";
+
+/// The Diagnostics page. Returns `true` when RELOAD AGENTS was pressed this frame (a button the original design did not have).
+pub fn diagnostics_page(ui: &mut Ui, t: &Tokens, d: &DiagnosticsData) -> bool {
     page(ui, |ui| {
+        let mut reload = false;
         h2(ui, t, "OVERLAY");
         if let Some(e) = d.error {
             fineprint(ui, t, e);
@@ -418,6 +423,10 @@ pub fn diagnostics_page(ui: &mut Ui, t: &Tokens, d: &DiagnosticsData) {
         }
         h2(ui, t, "COLLECTORS");
         ui.add_space(8.0);
+        if btn(ui, t, "RELOAD AGENTS", false).clicked() {
+            reload = true;
+        }
+        fineprint(ui, t, RELOAD_HINT);
         table(ui, t, &["AGENT", "STATE", "DETAIL", "LAST USAGE"], &collector_rows(d.agents));
         h2(ui, t, "APPLICATION");
         if let Some(i) = d.info {
@@ -427,7 +436,8 @@ pub fn diagnostics_page(ui: &mut Ui, t: &Tokens, d: &DiagnosticsData) {
                 fineprint(ui, t, n);
             }
         }
-    });
+        reload
+    })
 }
 
 // ------------------------------------------------------------------------------------------------ privacy
@@ -650,7 +660,10 @@ mod tests {
                             let o = settings_page(ui, &t, &s, &o.agents);
                             assert!(o.changed.is_none() && !o.quit, "nothing changes in a headless frame");
                         }
-                        1 => diagnostics_page(ui, &t, &DiagnosticsData { overlay: Some(&diag), agents: &o.agents, info: Some(&info), error: None }),
+                        1 => {
+                            let reload = diagnostics_page(ui, &t, &DiagnosticsData { overlay: Some(&diag), agents: &o.agents, info: Some(&info), error: None });
+                            assert!(!reload, "nothing is pressed in a headless frame");
+                        }
                         2 => privacy_page(ui, &t),
                         _ => {}
                     }
@@ -658,6 +671,46 @@ mod tests {
             });
             assert!(out.shapes.len() > 10, "page {page_kind}");
         }
+    }
+
+    /// Frames of the Diagnostics page with a primary click at `at` (the pointer arrives, the button goes down, it goes up).
+    /// `true` if any of them reported RELOAD AGENTS as pressed.
+    fn click_on_diagnostics(ctx: &egui::Context, at: Pos2) -> bool {
+        let t = Tokens::for_theme(Theme::Dark);
+        let (o, info, diag) = (mock::overview(), mock::app_info(), mock::diagnostics());
+        let button = |down| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: down, modifiers: Default::default() };
+        let mut pressed = false;
+        for events in [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)]] {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(812.0, 1400.0))), events, ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    pressed |= diagnostics_page(ui, &t, &DiagnosticsData { overlay: Some(&diag), agents: &o.agents, info: Some(&info), error: None });
+                });
+            });
+        }
+        pressed
+    }
+
+    #[test]
+    fn pressing_reload_agents_is_reported_and_only_that_button_reports_it() {
+        // Sweep the top of the page (the button sits under the OVERLAY block) at a fixed x: exactly one band of clicks, the one
+        // button, may report a reload.
+        let ctx = ctx();
+        let hits: Vec<f32> = (0..800).step_by(4).map(|y| y as f32).filter(|y| click_on_diagnostics(&ctx, Pos2::new(60.0, *y))).collect();
+        assert!(hits.len() >= 3, "no click on the page presses RELOAD AGENTS: {hits:?}");
+        let (first, last) = (hits[0], hits[hits.len() - 1]);
+        assert!(last - first <= 40.0, "one button is one band of clicks, not {first}..{last}: {hits:?}");
+        assert_eq!(hits.len() as f32, ((last - first) / 4.0).round() + 1.0, "the band has no gaps: {hits:?}");
+        // and a click far to the right of the button, on the same rows, does not press it
+        assert!(!click_on_diagnostics(&ctx, Pos2::new(700.0, (first + last) / 2.0)), "the button is not the width of the page");
+    }
+
+    #[test]
+    fn the_reload_button_says_what_it_does() {
+        let src = include_str!("pages.rs");
+        assert!(src.contains("\"RELOAD AGENTS\""));
+        assert!(RELOAD_HINT.contains("installed since the app started"), "{RELOAD_HINT}");
     }
 
     #[test]

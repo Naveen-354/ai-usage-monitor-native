@@ -761,6 +761,7 @@ impl App {
         let diag = self.main.diag.clone();
         let mut edit: Option<Settings> = None;
         let mut quit = false;
+        let mut reload = false;
         let mut period: Option<view::PeriodKey> = None;
 
         let builder = egui::ViewportBuilder::default().with_title("AI Usage Monitor").with_inner_size(main_size()).with_min_inner_size(MAIN_MIN);
@@ -820,7 +821,7 @@ impl App {
                     }
                     Page::Diagnostics => {
                         let agents = overview.as_ref().map(|o| o.agents.as_slice()).unwrap_or(&[]);
-                        pages::diagnostics_page(ui, &t, &DiagnosticsData { overlay: diag.as_ref().map(|d| &d.2), agents, info: diag.as_ref().map(|d| &d.1), error: None });
+                        reload = pages::diagnostics_page(ui, &t, &DiagnosticsData { overlay: diag.as_ref().map(|d| &d.2), agents, info: diag.as_ref().map(|d| &d.1), error: None });
                     }
                     Page::Privacy => pages::privacy_page(ui, &t),
                 });
@@ -841,9 +842,21 @@ impl App {
         if let Some(new) = edit {
             self.patch_json(bridge::settings_diff(settings, &new));
         }
+        if reload {
+            self.reload_agents();
+        }
         if quit {
             self.backend.quit();
         }
+    }
+
+    /// The Diagnostics page's RELOAD AGENTS: look for every supported agent on this computer again. The table fills in as
+    /// each collector finishes (they report through the usual health events), so the status bar only says it was started.
+    fn reload_agents(&mut self) {
+        self.main.status = Some(match self.backend.reload_agents() {
+            Ok(()) => format!("Reload started at {}: looking for every supported agent again.", chrono::Local::now().format("%H:%M:%S")),
+            Err(e) => format!("could not reload agents: {e}"),
+        });
     }
 }
 

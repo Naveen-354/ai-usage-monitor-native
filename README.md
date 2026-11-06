@@ -109,6 +109,14 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
   box with the day's total. Levels are quartiles of the days that had usage, so one huge day does not wash out the rest. It is built from
   the same 15-minute rollup and the same rules as the totals (enabled agents only, cached tokens only if "count cached tokens" is on).
   Checked on fixture data and on a real import of the agents' history; when the days cannot be read it says TOKEN DATA UNAVAILABLE, never zeros.
+* **OpenCode 2.x works.** On this machine OpenCode is now 2.2.5, which replaced the tables the collector read (`message`, `session`) with
+  `session_message` and `session_v2`; Diagnostics showed it as UNAVAILABLE ("opencode.db has no `message` table: the OpenCode schema has
+  changed"). The collector now reads both layouts (role in the `type` column, model in `data.model.id`, project from `session_v2.directory`);
+  on the real database it finds the one message and its numbers equal an independent count
+  (`cargo test -p ai_usage_monitor_core opencode::tests::real -- --ignored --nocapture`).
+* **RELOAD AGENTS** on the Diagnostics page (not in the original design): looks for every supported agent on this computer again. A running
+  program keeps the `PATH` it started with, so a CLI installed since then is invisible to it; the button re-reads the machine's and the
+  user's `PATH` from the registry first, then wakes every collector to detect and collect now.
 * Expanding and collapsing keeps the overlay on screen: it grows and shrinks around the screen corner it is nearest to (a bottom-right
   overlay opens up and to the left) and is clamped into the work area of *its own* monitor. Measured on a real window in all four
   corners, and when the app restarts while expanded; each collapses back to exactly where it started.
@@ -127,7 +135,12 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
   stopped the app at every login; fixed and pinned by a test, but still not tried on a real login.
 * No installer, no CI, no macOS/Linux build (the platform code is written to be portable but has never been compiled for them).
 * No long-running leak test; memory/CPU above are 30-40 s samples.
-* OpenCode's values are unvalidated (no local data to compare against).
+* OpenCode's values are barely validated: it reads the 1.x layout (`message`, from fixtures only) and the 2.x layout (`session_message`,
+  from the real 2.2.5 database, where exactly one message exists, and it matches an independent count). OpenCode's own 2.x session totals
+  run a little above its stored messages (calls such as titles are not stored as messages), so they will not match exactly.
+* **Reload agents** (Diagnostics page): the new `PATH` is read from the registry and the monitor detects every agent again, tested with a
+  fake agent that appears after start (a plain rescan does not find it, the reload does) and by clicking the button headlessly. Not yet
+  tried by installing a real agent while the app runs, and not built for macOS/Linux (there it re-detects but cannot see a new `PATH`).
 * Known leftovers to clean up: first-generation egui pages that the design port superseded are still compiled and tested but no longer shown
   (`expanded::show`, `settings::page`, `diagnostics::show`, the `statistics` charts), as are the unused `motion::drag` and
   `platform::hotkeys` parsers (the validating parser in `ui::settings::shortcut` is the one in use). `expanded::Page` is still the tab enum.

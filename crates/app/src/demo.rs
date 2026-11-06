@@ -132,6 +132,10 @@ impl Backend for DemoBackend {
         Ok(())
     }
 
+    fn reload_agents(&self) -> Result<(), BackendError> {
+        Ok(()) // the demo's agents are fixtures: there is nothing on this computer to look for
+    }
+
     fn export_json(&self, _path: &str) -> Result<(), BackendError> {
         Err(demo_only("export"))
     }

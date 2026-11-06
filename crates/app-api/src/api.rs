@@ -85,6 +85,9 @@ pub trait Backend: Send + Sync {
     fn pause(&self) -> Result<(), BackendError>;
     fn resume(&self) -> Result<(), BackendError>;
     fn rescan_agent(&self, agent_id: &str) -> Result<(), BackendError>;
+    /// Looks for every supported agent on this computer again, including ones installed since the app started, and
+    /// collects from what it finds. The results arrive as the usual health and overview events.
+    fn reload_agents(&self) -> Result<(), BackendError>;
     fn export_json(&self, path: &str) -> Result<(), BackendError>;
     fn export_csv(&self, path: &str) -> Result<(), BackendError>;
     fn clear_history(&self) -> Result<(), BackendError>;

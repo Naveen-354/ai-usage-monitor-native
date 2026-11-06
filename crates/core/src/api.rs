@@ -154,6 +154,15 @@ impl Core {
         }
     }
 
+    /// Looks for the agents again, including any installed since the app started: re-reads the system `PATH` (a running
+    /// program does not see it change) and runs every collector's detection and collection now. Without monitoring this
+    /// does nothing.
+    pub fn reload_agents(&self) {
+        if let Some(sup) = &self.supervisor {
+            sup.reload_environment();
+        }
+    }
+
     pub fn subscribe(&self) -> Receiver<CoreEvent> {
         let (tx, rx) = mpsc::channel();
         if let Ok(mut subs) = self.subscribers.lock() {
@@ -278,6 +287,7 @@ mod tests {
         assert!(core.collector_health().unwrap().is_empty());
         let _rx = core.subscribe();
         core.rescan();
+        core.reload_agents(); // without monitoring there is nothing to reload, and nothing breaks
         core.shutdown();
     }
 }

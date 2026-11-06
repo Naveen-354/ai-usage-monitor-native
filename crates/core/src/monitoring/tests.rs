@@ -217,6 +217,55 @@ fn a_missing_agent_is_never_run_and_reported_not_installed() {
     r.sup.shutdown();
 }
 
+/// An agent found the way the real CLIs are: by looking for its executable on `PATH`.
+struct OnPath {
+    runs: AtomicUsize,
+}
+
+impl AgentCollector for OnPath {
+    fn id(&self) -> AgentId {
+        "opencode"
+    }
+    fn get_agent_info(&self) -> AgentInfo {
+        AgentInfo { id: "opencode", name: "OnPath", data_sources: &[], caveats: &[] }
+    }
+    fn detect(&self, env: &Env) -> Detection {
+        let binary = env.which(&["fake-agent-cli"], &[]);
+        let presence = if binary.is_some() { Presence::Installed } else { Presence::NotFound };
+        Detection { presence, roots: vec![], binary, note: None }
+    }
+    fn collect_usage(&self, _ctx: &CollectCtx<'_>, _sink: &mut dyn BatchSink) -> Result<CollectSummary, CollectError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(CollectSummary::default())
+    }
+}
+
+#[test]
+fn an_agent_installed_after_the_app_started_is_found_by_a_reload_and_not_before() {
+    let c = Arc::new(OnPath { runs: AtomicUsize::new(0) });
+    let r = rig(vec![c.clone()]);
+    wait_until("not installed yet", || r.health("opencode").is_some_and(|h| h.availability == Availability::NotInstalled));
+    assert_eq!(c.runs.load(Ordering::SeqCst), 0);
+
+    // The user installs the CLI now: its folder is on the machine's PATH, but not on the one this program started with.
+    let bin = r._dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("fake-agent-cli"), b"").unwrap();
+
+    // Looking again with the *old* environment (what a plain rescan does) still finds nothing...
+    r.sup.refresh_now();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(r.health("opencode").unwrap().availability, Availability::NotInstalled, "a rescan alone cannot see a new PATH");
+
+    // ...a reload with the machine as it is now does.
+    let mut now = Env::with_home(r._dir.path());
+    now.path_dirs = vec![bin];
+    r.sup.reload_environment_with(now);
+    wait_until("found after the reload", || r.health("opencode").is_some_and(|h| h.availability != Availability::NotInstalled));
+    wait_until("and collected", || c.runs.load(Ordering::SeqCst) >= 1);
+    r.sup.shutdown();
+}
+
 #[test]
 fn rerunning_the_same_events_is_idempotent() {
     let c = Fake::new("codex", Mode::Emit(vec![event("codex", "a", 1000)]));

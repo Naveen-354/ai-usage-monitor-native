@@ -257,6 +257,13 @@ impl Backend for CoreBackend {
         })
     }
 
+    fn reload_agents(&self) -> Result<(), BackendError> {
+        self.with_core(|c| {
+            c.reload_agents();
+            Ok(())
+        })
+    }
+
     fn export_json(&self, _path: &str) -> Result<(), BackendError> {
         Err(not_yet("JSON export"))
     }
@@ -401,6 +408,7 @@ mod tests {
         b.shutdown();
         assert!(b.settings().is_err());
         assert!(b.daily_totals(371, None).is_err());
+        assert!(b.reload_agents().is_err(), "a reload after shutdown is an error, not a hang or a panic");
         b.shutdown(); // idempotent
     }
 

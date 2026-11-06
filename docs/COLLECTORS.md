@@ -16,7 +16,7 @@ text, prompts, file contents and credential files (`auth.json`, `.credentials.js
 | Codex | Σ deltas 793,880,810 = independent reference; 65/65 comparable sessions match individually |
 | Gemini CLI | 4,263 records → 1,812 unique; fresh 33,771,083 · cached 127,178,603 · output 857,662 · total 161,807,348 — identical to the reference |
 | Antigravity | 5,458 rows → 5,434 generations; 0 duplicate response ids; output = thinking + response on all; input 57,325,239 · output 2,445,071 · cache-read 401,113,018 |
-| OpenCode | synthetic fixtures only (no local data) |
+| OpenCode | 2.x: the one real message equals an independent count (3,849 in · 12 out · 3,968 cache-read); 1.x: synthetic fixtures only |
 
 The opt-in real-data tests live next to each collector (`real_data_*`, `#[ignore]`) and compare against a
 *differently written* parser rather than copying numbers, so they keep working as the data grows.
@@ -29,7 +29,7 @@ The opt-in real-data tests live next to each collector (`real_data_*`, `#[ignore
 | Codex CLI / Desktop | yes (npm 0.147.0) | `~/.codex/sessions/**/rollout-*.jsonl` | yes | 68 rollouts, 7,115 `token_count` events | **Supported** |
 | Gemini CLI | data only — npm install is broken, no `gemini` on PATH | `~/.gemini/tmp/*/chats/*.jsonl` + `*.json` | yes | 1,126 files, 1,812 unique messages, last used 2026-07 | **Supported (historical)** |
 | Antigravity CLI (`agy`) | yes (`agy.exe` 1.3.1) | `~/.gemini/antigravity-cli/conversations/*.db` (+ IDE: `~/.gemini/antigravity/conversations/*.db`) | yes, via schema embedded in `agy.exe` | 106 DBs, 5,434 generations, active today | **Supported** |
-| OpenCode | yes (npm 1.18.4) | `~/.local/share/opencode/opencode.db` | schema yes; **values no** | 0 sessions, 0 messages (confirmed by `opencode stats`) | **Supported, unverified values** |
+| OpenCode | yes (2.2.5; was 1.18.4) | `~/.local/share/opencode/opencode.db` | 2.x layout yes; 1.x from the binary only | 1 session, 1 assistant message (2.x) | **Supported, barely validated values** |
 | Ollama | **no** (only leftover `~/.ollama/{config,server}.json`) | none persisted | n/a | none | **Unavailable** |
 | Aider | **no** | `.aider.chat.history.md` (per project) | no — cannot inspect | none | **Unavailable** |
 
@@ -139,6 +139,23 @@ read from the protobuf descriptors embedded in `agy.exe` (a Go binary), then val
   "unavailable: unrecognised format" when decoding yields nothing — never to zeros.
 
 ## OpenCode
+
+**OpenCode 2.x (verified 2026-11-05 on 2.2.5).** The 1.x tables below were replaced. The collector reads both layouts.
+
+* Tables: `session_message(id, session_id, type, seq, time_created, time_updated, data JSON)` and `session_v2(id, …, directory, …,
+  cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model, …)`; `session_part` holds the parts.
+  Counted: rows whose **`type` column is `assistant`** (others seen: `user`, `idle`).
+* An assistant row's `data`: `{time:{created,streamed,completed}, agent, model:{id,providerID,variant}, content:[…], finish, rawFinish, cost,
+  tokens:{input, output, reasoning, cache:{read, write}}}`. The token block is unchanged from 1.x; the **model is `data.model.id`** (1.x: `modelID`)
+  and there is no `role` or `path.cwd` (the project comes from `session_v2.directory`).
+* Mapping is the same as 1.x: `output = output + reasoning`. Dedupe key `opencode:<id>`, so a migrated database that holds the same message in both layouts
+  counts it once. The cursor keeps one `time_updated` mark per layout.
+* **Only one real message exists locally**: input 3,849 · output 12 · cache-read 3,968, equal to an independent count. `session_v2.tokens_*` for the same
+  session read 3,932 · 16 · 4,352, a little higher: calls such as title generation are not stored as messages. Messages are counted because the periods
+  and charts need an event per message. Diagnostics says the values are barely validated.
+* Before this was supported, Diagnostics showed it as unavailable: "opencode.db has no `message` table: the OpenCode schema has changed".
+
+**OpenCode 1.x (1.18.4, original findings).**
 
 * `~/.local/share/opencode/opencode.db` (SQLite). Verified tables: `session` (with `tokens_input`,
   `tokens_output`, `tokens_reasoning`, `tokens_cache_read`, `tokens_cache_write`, `cost`, `model`,

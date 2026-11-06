@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -57,13 +57,21 @@ const HEALTH_REFRESH: Duration = Duration::from_secs(60);
 struct Shared {
     db: Arc<Database>,
     settings: Arc<SettingsStore>,
-    env: Env,
+    /// What the collectors may look at. Replaced (never edited) by a reload, so a run that is already going keeps the one
+    /// it started with.
+    env: RwLock<Arc<Env>>,
     notifier: Arc<dyn Notifier>,
     /// Aborts in-flight runs (pause / shutdown). Collectors check it between files.
     cancel: AtomicBool,
     shutdown: AtomicBool,
     /// agent id → "this run is the first import of its history".
     running: Mutex<HashMap<AgentId, bool>>,
+}
+
+impl Shared {
+    fn env(&self) -> Arc<Env> {
+        self.env.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
 }
 
 pub struct Supervisor {
@@ -83,7 +91,7 @@ impl Supervisor {
         let shared = Arc::new(Shared {
             db,
             settings,
-            env,
+            env: RwLock::new(Arc::new(env)),
             notifier,
             cancel: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
@@ -112,6 +120,19 @@ impl Supervisor {
         for tx in &self.senders {
             let _ = tx.send(Wake::Refresh);
         }
+    }
+
+    /// Look for the agents again: re-read where programs and data can be found (the system `PATH`, which a running program
+    /// does not see change) and run every collector's detection and collection now. This is what finds an agent that was
+    /// installed after the app started.
+    pub fn reload_environment(&self) {
+        self.reload_environment_with(Env::reloaded());
+    }
+
+    /// [`Supervisor::reload_environment`] with the machine described by `env` (tests give it a different one).
+    pub fn reload_environment_with(&self, env: Env) {
+        *self.shared.env.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(env);
+        self.refresh_now();
     }
 
     /// Agents currently importing their history for the first time (UI shows "IMPORTING").
@@ -241,7 +262,7 @@ impl Worker {
         match &self.projects {
             Some((e, r)) if *e == enabled => r.clone(),
             _ => {
-                let r = Arc::new(ProjectResolver::new(enabled, self.shared.env.home.clone()));
+                let r = Arc::new(ProjectResolver::new(enabled, self.shared.env().home.clone()));
                 self.projects = Some((enabled, r.clone()));
                 r
             }
@@ -251,8 +272,10 @@ impl Worker {
     fn cycle(&mut self) {
         let id = self.id();
         let settings = self.shared.settings.get();
+        // One environment for the whole cycle: a reload in the middle of it applies from the next one.
+        let env = self.shared.env();
 
-        let detection = match guarded(|| self.collector.detect(&self.shared.env)) {
+        let detection = match guarded(|| self.collector.detect(&env)) {
             Ok(d) => d,
             Err(msg) => {
                 self.publish_error(format!("detect() crashed (isolated): {msg}"));
@@ -278,7 +301,7 @@ impl Worker {
         let projects = self.resolver(settings.project_detection);
         let mut sink = DbSink::new(&self.shared.db, id, self.shared.notifier.as_ref());
         let ctx = CollectCtx {
-            env: &self.shared.env,
+            env: &env,
             detection: &detection,
             cursors: &cursors,
             projects: &projects,

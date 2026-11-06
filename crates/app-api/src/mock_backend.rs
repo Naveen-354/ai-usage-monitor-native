@@ -133,6 +133,7 @@ impl Backend for MockBackend {
     fn pause(&self) -> Result<(), BackendError> { self.check_fail() }
     fn resume(&self) -> Result<(), BackendError> { self.check_fail() }
     fn rescan_agent(&self, _agent_id: &str) -> Result<(), BackendError> { self.check_fail() }
+    fn reload_agents(&self) -> Result<(), BackendError> { self.check_fail() }
     fn export_json(&self, _path: &str) -> Result<(), BackendError> { self.check_fail() }
     fn export_csv(&self, _path: &str) -> Result<(), BackendError> { self.check_fail() }
     fn clear_history(&self) -> Result<(), BackendError> { self.check_fail() }

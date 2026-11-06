@@ -25,8 +25,8 @@ dirs = "7"
 notify = "8"
 
 [target.'cfg(windows)'.dependencies]
-# Bindings only (no runtime): used to show the overlay without stealing focus and to read back WS_EX_TOPMOST.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Bindings only (no runtime): used to read the system PATH from the registry, so a CLI installed after the app started is found.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
 
 [dev-dependencies]
 tempfile = "3"
