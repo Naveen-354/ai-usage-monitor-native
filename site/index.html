@@ -1,100 +1,339 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Usage Monitor</title>
-  <meta name="description" content="A local-first floating overlay for Windows that shows how many tokens your AI coding agents have used. Nothing is uploaded.">
-  <meta name="color-scheme" content="dark light">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c9cff'/%3E%3Cpath d='M8 22V14M14 22V9M20 22v-6M26 22V12' stroke='%230b0d10' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <header class="top">
-    <a class="brand" href="/"><span class="logo" aria-hidden="true"></span>AI Usage Monitor</a>
-    <nav>
-      <a href="#features">Features</a>
-      <a href="#install">Install</a>
-      <a href="#privacy">Privacy</a>
-      <a href="https://github.com/Naveen-354/ai-usage-monitor-native" rel="noopener">GitHub</a>
-    </nav>
-  </header>
-
-  <main>
-    <section class="hero">
-      <div class="hero-text">
-        <p class="eyebrow">Windows 10 / 11 &middot; free &middot; local-first</p>
-        <h1>See what your AI coding agents are using.</h1>
-        <p class="lead">A small floating overlay that counts the tokens used by Claude Code, Codex, Gemini CLI, Antigravity and OpenCode. It reads the files your agents already wrote to your own disk. Nothing is uploaded, and there is no telemetry.</p>
-        <div class="cta">
-          <a id="download" class="button primary disabled" aria-disabled="true" href="#install">Checking the latest version&hellip;</a>
-          <a class="button" href="https://github.com/Naveen-354/ai-usage-monitor-native/releases" rel="noopener">All releases</a>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Usage Monitor — A little clarity for your AI workflow.</title>
+    <meta
+      name="description"
+      content="Keep your AI token usage in sight. A lightweight, local-first Windows overlay for Claude Code, Codex, Gemini CLI, Antigravity, and OpenCode."
+    />
+    <meta name="theme-color" content="#10120f" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23d0fa8b'/%3E%3Cpath d='M8 23V15M16 23V8M24 23V12' stroke='%2310120f' stroke-width='4'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="header wrap">
+      <a class="brand" href="#" aria-label="AI Usage Monitor home"
+        ><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span
+        >AI Usage Monitor<span class="native-badge">NATIVE</span></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="#experience">The experience</a
+        ><a href="#agents">Supported agents</a
+        ><a
+          href="https://github.com/Naveen-354/ai-usage-monitor-native"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub ↗</a
+        >
+      </nav>
+      <a class="nav-download" href="#download-section"
+        >Get the app <span aria-hidden="true">↓</span></a
+      >
+    </header>
+    <main id="main">
+      <section class="hero wrap">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="status-dot"></span> SMALL APP. BIG PICTURE.
+          </p>
+          <h1>
+            Your AI usage.<br />In sight.<br /><span>Out of the way.</span>
+          </h1>
+          <p class="lead">
+            One quiet little overlay for all your coding agents. See your tokens
+            add up, stay in your flow, and keep your data right where it
+            belongs.
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button primary"
+              data-download
+              href="https://github.com/Naveen-354/ai-usage-monitor-native/releases"
+              >Download for Windows <span aria-hidden="true">↘</span></a
+            ><a class="text-link" href="#experience"
+              >Take a closer look <span aria-hidden="true">↗</span></a
+            >
+          </div>
+          <p class="download-meta">
+            Windows 10 / 11 <span>·</span> Free to use <span>·</span> Open
+            source
+          </p>
         </div>
-        <p id="release-line" class="muted small" aria-live="polite"></p>
-      </div>
-
-      <figure class="device" aria-label="Sample of the overlay (example numbers)">
-        <div class="overlay">
-          <div class="big">255.5M</div>
-          <div class="cap">TOKENS TODAY</div>
-          <ul class="agents">
-            <li><span class="dot" style="--c:#ff6a00"></span>Claude Code<b>232.3M</b></li>
-            <li><span class="dot" style="--c:#2bb673"></span>Codex CLI<b>18.8M</b></li>
-            <li><span class="dot" style="--c:#4c8bf5"></span>Gemini CLI<b>3.3M</b></li>
-            <li><span class="dot" style="--c:#b455ff"></span>Antigravity<b>1.1M</b></li>
-          </ul>
-          <div class="heat" aria-hidden="true"></div>
+        <div
+          class="hero-scene"
+          aria-label="Illustrative preview of the token overlay"
+        >
+          <div class="scene-grid"></div>
+          <div class="scene-label">
+            <span class="tiny-cross">+</span> YOUR WORKSPACE, WITH A LITTLE MORE
+            CONTEXT
+          </div>
+          <div class="editor-window" aria-hidden="true">
+            <div class="editor-top">
+              <span class="window-dots">● ● ●</span
+              ><span>workspace / building-something-good</span>
+            </div>
+            <div class="editor-body">
+              <div class="editor-side">
+                EXPLORER<br /><br />⌄ src<br />　 app.rs<br />　 main.rs<br />　
+                lib.rs<br /><br />⌄ components<br />　 overlay.rs<br />　
+                settings.rs
+              </div>
+              <div class="editor-code">
+                <span class="code-comment"
+                  >// Less guessing. More building.</span
+                ><br /><br /><span class="code-purple">fn</span>
+                <span class="code-green">make_something</span>() {<br />　<span
+                  class="code-purple"
+                  >let</span
+                >
+                idea =
+                <span class="code-gold">"something good"</span>;<br />　<span
+                  class="code-purple"
+                  >let</span
+                >
+                focus =
+                <span class="code-green">keep_building</span
+                >();<br /><br />　<span class="code-comment"
+                  >// Your agents do their thing.</span
+                ><br />　<span class="code-comment"
+                  >// We keep an eye on the tokens.</span
+                ><br />　workspace.<span class="code-green">ship</span>(idea,
+                focus);<br />}<br /><br /><span class="code-comment">▍</span>
+              </div>
+            </div>
+            <div class="editor-bottom">
+              ⑂ main <span>Rust　 UTF-8　 Ln 12, Col 1</span>
+            </div>
+          </div>
+          <div class="usage-widget">
+            <div class="widget-heading">
+              <span><span class="status-dot"></span> AI USAGE</span
+              ><span class="widget-live">LIVE ↗</span>
+            </div>
+            <div class="widget-total" id="preview-total">
+              128,640<span>↗</span>
+            </div>
+            <div class="widget-sub">TOKENS TODAY <span>LOCAL TIME</span></div>
+            <div class="sparkline" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i
+              ><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i
+              ><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <div class="widget-agent">
+              <span><b class="agent-dot claude"></b>Claude Code</span
+              ><strong>64,280</strong>
+            </div>
+            <div class="widget-agent">
+              <span><b class="agent-dot codex"></b>Codex</span
+              ><strong>42,160</strong>
+            </div>
+            <div class="widget-agent">
+              <span><b class="agent-dot gemini"></b>Gemini CLI</span
+              ><strong>22,200</strong>
+            </div>
+            <div class="widget-footer">
+              ON YOUR DEVICE. ALWAYS.<span>↗</span>
+            </div>
+          </div>
+          <div class="scene-note">
+            <span aria-hidden="true">↖</span> A tiny companion for your big
+            ideas.
+          </div>
+          <span class="preview-caption"
+            >ILLUSTRATIVE PREVIEW · SAMPLE DATA</span
+          >
         </div>
-        <figcaption class="muted small">Example numbers, not real usage.</figcaption>
-      </figure>
-    </section>
-
-    <section id="features" class="section">
-      <h2>What it does</h2>
-      <div class="grid">
-        <article class="card"><h3>Floating overlay</h3><p>Always on top, draggable, remembers where you left it. Click to expand into per-agent totals.</p></article>
-        <article class="card"><h3>Every agent in one place</h3><p>Claude Code, Codex, Gemini CLI, Antigravity and OpenCode, side by side, with input, output and cached tokens.</p></article>
-        <article class="card"><h3>Activity heat map</h3><p>A year of daily usage in the style of a contribution graph, for all agents or one at a time.</p></article>
-        <article class="card"><h3>Honest numbers</h3><p>When an agent has no reliable data it says so. It never shows a zero it cannot stand behind.</p></article>
-        <article class="card"><h3>Diagnostics</h3><p>See what was found, what each collector read, and reload to find agents you installed since.</p></article>
-        <article class="card"><h3>Tiny and native</h3><p>One small executable. No browser engine, no background service, and a few tens of megabytes of memory.</p></article>
-      </div>
-    </section>
-
-    <section id="install" class="section">
-      <h2>Install</h2>
-      <ol class="steps">
-        <li><b>Download</b> the latest version with the button above.</li>
-        <li><b>Run it.</b> Windows may show a SmartScreen warning because the app is not code-signed yet: choose <i>More info</i>, then <i>Run anyway</i>. Verify the download first (below) if you want to be sure.</li>
-        <li><b>Quit</b> from the tray icon any time. Your data stays in <code>%APPDATA%\dev.aiusage.monitor.native</code>.</li>
-      </ol>
-
-      <div id="files" class="files" hidden>
-        <h3>Files in <span id="files-version"></span></h3>
-        <ul id="file-list"></ul>
-        <p class="muted small">Verify a download in PowerShell, and compare with the SHA-256 above:</p>
-        <pre class="code"><code>Get-FileHash .\&lt;file&gt; -Algorithm SHA256</code></pre>
-      </div>
-
-      <div id="notes-box" class="notes" hidden>
-        <h3>What&rsquo;s new</h3>
-        <pre id="notes"></pre>
-      </div>
-    </section>
-
-    <section id="privacy" class="section">
-      <h2>Privacy</h2>
-      <p>The app reads token counters, model names, timestamps and the folder name a session ran in. It never reads prompts, responses, code, or credential files, and it sends nothing anywhere. This page is a plain website: it loads no analytics, no fonts and no scripts from other sites.</p>
-      <p>The full audit of what is read, per agent, is in <a href="https://github.com/Naveen-354/ai-usage-monitor-native/blob/main/PRIVACY.md" rel="noopener">PRIVACY.md</a>.</p>
-    </section>
-  </main>
-
-  <footer class="foot">
-    <span>AI Usage Monitor</span>
-    <a href="https://github.com/Naveen-354/ai-usage-monitor-native" rel="noopener">Source on GitHub</a>
-    <a href="/api/latest">Update feed (JSON)</a>
-  </footer>
-
-  <script src="/app.js" defer></script>
-</body>
+      </section>
+      <section class="agents-strip wrap" id="agents">
+        <p>YOUR TOOLS. ONE PLACE.</p>
+        <div class="agent-logos">
+          <span><b class="tool-symbol claude-text">✳</b> Claude Code</span
+          ><span><b class="tool-symbol">◎</b> Codex</span
+          ><span><b class="tool-symbol gemini-text">✦</b> Gemini CLI</span
+          ><span><b class="tool-symbol antigravity-text">Λ</b> Antigravity</span
+          ><span><b class="tool-symbol">▣</b> OpenCode</span>
+        </div>
+        <p class="support-note">
+          Usage collection for five agents. Ollama and Aider detection only.
+        </p>
+      </section>
+      <section class="experience wrap" id="experience">
+        <div class="section-heading">
+          <p class="eyebrow">BUILT FOR THE WAY YOU BUILD</p>
+          <h2>Stay in the flow.<br /><span>We’ll keep count.</span></h2>
+          <p>
+            No dashboard to babysit. No browser tab to lose.<br />Just the
+            context you need, wherever you work.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature feature-wide">
+            <div class="feature-top">
+              <span class="feature-number">01 / THE OVERLAY</span
+              ><span class="feature-icon">↗</span>
+            </div>
+            <h3>A small footprint.<br />A clearer picture.</h3>
+            <p>
+              Keep it compact or expand for a closer look. Pin it above your
+              workspace, move it to your corner, and check usage without
+              breaking focus.
+            </p>
+            <div class="mini-overlay">
+              <span class="status-dot"></span
+              ><strong>128.6<span>k</span></strong
+              ><span class="mini-label">TOKENS<br />TODAY</span
+              ><span class="mini-flame">✳</span>
+            </div>
+            <span class="sample-label">COMPACT VIEW · SAMPLE DATA</span>
+          </article>
+          <article class="feature">
+            <div class="feature-top">
+              <span class="feature-number">02 / YOUR HISTORY</span
+              ><span class="feature-icon">▦</span>
+            </div>
+            <h3>See your rhythm.</h3>
+            <p>
+              A year of activity, one square at a time. Spot your busiest days
+              and explore usage by agent.
+            </p>
+            <div class="heat" aria-label="Illustrative activity heatmap"></div>
+            <span class="sample-label">ILLUSTRATIVE ACTIVITY</span>
+          </article>
+          <article class="feature privacy-feature">
+            <div class="feature-top">
+              <span class="feature-number">03 / LOCAL FIRST</span
+              ><span class="feature-icon">⌁</span>
+            </div>
+            <h3>Your tokens.<br />Your business.</h3>
+            <p>
+              Reads the counters your agents already save locally. No prompts
+              collected. No telemetry. No usage data uploaded.
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/Naveen-354/ai-usage-monitor-native/blob/main/PRIVACY.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Read the privacy details ↗</a
+            >
+            <div class="privacy-seal" aria-hidden="true">
+              ↳ <span>STAYS ON YOUR MACHINE</span> ↲
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="details-strip wrap">
+        <div>
+          <span class="detail-icon">↯</span><strong>Rust at the core.</strong>
+          <p>A native app. No WebView.</p>
+        </div>
+        <div>
+          <span class="detail-icon">◉</span
+          ><strong>Quiet until you need it.</strong>
+          <p>Tray access and global shortcuts.</p>
+        </div>
+        <div>
+          <span class="detail-icon">✳</span
+          ><strong>A little personality.</strong>
+          <p>A flame and sixteen pixel-art scenes.</p>
+        </div>
+      </section>
+      <section class="download-section wrap" id="download-section">
+        <div class="download-panel">
+          <div>
+            <p class="eyebrow">
+              <span class="status-dot"></span> READY WHEN YOU ARE
+            </p>
+            <h2>Less wondering.<br /><span>More building.</span></h2>
+            <p>Your next coding session, with a little more clarity.</p>
+          </div>
+          <div class="download-action">
+            <a
+              id="download"
+              class="button primary"
+              data-download
+              href="https://github.com/Naveen-354/ai-usage-monitor-native/releases"
+              >Download for Windows <span aria-hidden="true">↓</span></a
+            >
+            <p class="download-meta">Windows 10 / 11 · Native .exe</p>
+            <p id="release-line" role="status" aria-live="polite">
+              Checking the latest GitHub release…
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/Naveen-354/ai-usage-monitor-native/releases"
+              target="_blank"
+              rel="noopener noreferrer"
+              >All releases & release notes ↗</a
+            >
+          </div>
+        </div>
+        <div id="files" class="release-files" hidden>
+          <h3>Release <span id="files-version"></span></h3>
+          <ul id="file-list"></ul>
+        </div>
+        <details id="notes-box" hidden>
+          <summary>What’s new in this release</summary>
+          <pre id="notes"></pre>
+        </details>
+      </section>
+      <section class="faq wrap">
+        <p class="eyebrow">A FEW GOOD QUESTIONS</p>
+        <div>
+          <details>
+            <summary>How do I install it?<span>+</span></summary>
+            <p>
+              Download the .exe from the latest GitHub release, put it in a
+              permanent folder, and run it. Use the tray menu to quit. The app
+              stores its data locally in your AppData folder.
+            </p>
+          </details>
+          <details>
+            <summary>Does it show my subscription limit?<span>+</span></summary>
+            <p>
+              It shows token counters saved by your local coding agents. The
+              Claude Code five-hour window is a local estimate, not a
+              subscription percentage. Usage from other devices or websites is
+              not included.
+            </p>
+          </details>
+          <details>
+            <summary>Does it need my API keys?<span>+</span></summary>
+            <p>
+              Usage monitoring needs no API keys. It reads local usage records.
+              Optional account management uses each agent’s own sign-in flow.
+            </p>
+          </details>
+          <details>
+            <summary>Can I use it on macOS or Linux?<span>+</span></summary>
+            <p>
+              This release targets Windows 10 and 11. Other operating systems
+              have not been validated yet. Source code and build instructions
+              are available on GitHub.
+            </p>
+          </details>
+        </div>
+      </section>
+    </main>
+    <footer class="footer wrap">
+      <a class="brand" href="#"
+        ><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span
+        >AI Usage Monitor</a
+      ><span>Made for builders. Designed to stay out of the way.</span
+      ><a
+        href="https://github.com/Naveen-354/ai-usage-monitor-native"
+        target="_blank"
+        rel="noopener noreferrer"
+        >Explore the source ↗</a
+      >
+    </footer>
+  </body>
 </html>
