@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Usage Monitor</title>
+  <meta name="description" content="A local-first floating overlay for Windows that shows how many tokens your AI coding agents have used. Nothing is uploaded.">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c9cff'/%3E%3Cpath d='M8 22V14M14 22V9M20 22v-6M26 22V12' stroke='%230b0d10' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/"><span class="logo" aria-hidden="true"></span>AI Usage Monitor</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#privacy">Privacy</a>
+      <a href="https://github.com/Naveen-354/ai-usage-monitor-native" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-text">
+        <p class="eyebrow">Windows 10 / 11 &middot; free &middot; local-first</p>
+        <h1>See what your AI coding agents are using.</h1>
+        <p class="lead">A small floating overlay that counts the tokens used by Claude Code, Codex, Gemini CLI, Antigravity and OpenCode. It reads the files your agents already wrote to your own disk. Nothing is uploaded, and there is no telemetry.</p>
+        <div class="cta">
+          <a id="download" class="button primary disabled" aria-disabled="true" href="#install">Checking the latest version&hellip;</a>
+          <a class="button" href="https://github.com/Naveen-354/ai-usage-monitor-native/releases" rel="noopener">All releases</a>
+        </div>
+        <p id="release-line" class="muted small" aria-live="polite"></p>
+      </div>
+
+      <figure class="device" aria-label="Sample of the overlay (example numbers)">
+        <div class="overlay">
+          <div class="big">255.5M</div>
+          <div class="cap">TOKENS TODAY</div>
+          <ul class="agents">
+            <li><span class="dot" style="--c:#ff6a00"></span>Claude Code<b>232.3M</b></li>
+            <li><span class="dot" style="--c:#2bb673"></span>Codex CLI<b>18.8M</b></li>
+            <li><span class="dot" style="--c:#4c8bf5"></span>Gemini CLI<b>3.3M</b></li>
+            <li><span class="dot" style="--c:#b455ff"></span>Antigravity<b>1.1M</b></li>
+          </ul>
+          <div class="heat" aria-hidden="true"></div>
+        </div>
+        <figcaption class="muted small">Example numbers, not real usage.</figcaption>
+      </figure>
+    </section>
+
+    <section id="features" class="section">
+      <h2>What it does</h2>
+      <div class="grid">
+        <article class="card"><h3>Floating overlay</h3><p>Always on top, draggable, remembers where you left it. Click to expand into per-agent totals.</p></article>
+        <article class="card"><h3>Every agent in one place</h3><p>Claude Code, Codex, Gemini CLI, Antigravity and OpenCode, side by side, with input, output and cached tokens.</p></article>
+        <article class="card"><h3>Activity heat map</h3><p>A year of daily usage in the style of a contribution graph, for all agents or one at a time.</p></article>
+        <article class="card"><h3>Honest numbers</h3><p>When an agent has no reliable data it says so. It never shows a zero it cannot stand behind.</p></article>
+        <article class="card"><h3>Diagnostics</h3><p>See what was found, what each collector read, and reload to find agents you installed since.</p></article>
+        <article class="card"><h3>Tiny and native</h3><p>One small executable. No browser engine, no background service, and a few tens of megabytes of memory.</p></article>
+      </div>
+    </section>
+
+    <section id="install" class="section">
+      <h2>Install</h2>
+      <ol class="steps">
+        <li><b>Download</b> the latest version with the button above.</li>
+        <li><b>Run it.</b> Windows may show a SmartScreen warning because the app is not code-signed yet: choose <i>More info</i>, then <i>Run anyway</i>. Verify the download first (below) if you want to be sure.</li>
+        <li><b>Quit</b> from the tray icon any time. Your data stays in <code>%APPDATA%\dev.aiusage.monitor.native</code>.</li>
+      </ol>
+
+      <div id="files" class="files" hidden>
+        <h3>Files in <span id="files-version"></span></h3>
+        <ul id="file-list"></ul>
+        <p class="muted small">Verify a download in PowerShell, and compare with the SHA-256 above:</p>
+        <pre class="code"><code>Get-FileHash .\&lt;file&gt; -Algorithm SHA256</code></pre>
+      </div>
+
+      <div id="notes-box" class="notes" hidden>
+        <h3>What&rsquo;s new</h3>
+        <pre id="notes"></pre>
+      </div>
+    </section>
+
+    <section id="privacy" class="section">
+      <h2>Privacy</h2>
+      <p>The app reads token counters, model names, timestamps and the folder name a session ran in. It never reads prompts, responses, code, or credential files, and it sends nothing anywhere. This page is a plain website: it loads no analytics, no fonts and no scripts from other sites.</p>
+      <p>The full audit of what is read, per agent, is in <a href="https://github.com/Naveen-354/ai-usage-monitor-native/blob/main/PRIVACY.md" rel="noopener">PRIVACY.md</a>.</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>AI Usage Monitor</span>
+    <a href="https://github.com/Naveen-354/ai-usage-monitor-native" rel="noopener">Source on GitHub</a>
+    <a href="/api/latest">Update feed (JSON)</a>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

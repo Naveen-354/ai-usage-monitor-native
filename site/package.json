@@ -1,0 +1,9 @@
+{
+  "name": "ai-usage-monitor-site",
+  "private": true,
+  "description": "Download page and update feed for AI Usage Monitor (hosted on Vercel; the binaries live on GitHub Releases).",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": { "node": ">=20" }
+}
