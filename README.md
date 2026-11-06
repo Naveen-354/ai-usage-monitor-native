@@ -21,16 +21,19 @@ CPU while the flame animates live was ~3.5 % (spike) to ~11 % (debug builds) and
 
 ## Animations
 
-Settings -> Display -> **Animation style** swaps the flame for one of seven pixel-art scenes (hamster wheel, rubber duck, slot machine,
-piggy bank, typing cat, token muncher, token spitter); the Settings page shows a live preview of the one you pick. **Animation quality** sets how
+Settings -> Display -> **Animation style** swaps the flame for one of sixteen pixel-art scenes (hamster wheel, rubber duck, slot machine,
+piggy bank, typing cat, token muncher, token spitter, golden egg chicken, turbo snail, sneezing panda, multitasking octopus, bubble gum pop,
+starfield warp, and three that draw your real numbers: a **heartbeat monitor** that follows the recent token rate, a **water tank** whose level is
+how full the day is, and an **agent equalizer** with one bar per enabled agent, in that agent's colour, bouncing while it works); the Settings page
+shows a live preview of the one you pick. **Animation quality** sets how
 sharp and smooth the scenes are. Every scene has the flame's three states: *live* (an agent is working: it moves), *idle* (a still pose,
 no timer), *off* (paused or no data: a still, greyed pose); and a token **surge** makes a bigger moment (a jump in tokens, scaled by size).
 
 | quality | canvas | frame rate | memory held | draw time per frame (release, one core) |
 |---|---|---|---|---|
-| Low | 80 x 60 | 8 fps | 23 KB | 13-35 us |
-| Medium | 160 x 120 | 12 fps | 94 KB | 160-230 us |
-| High | 240 x 180 | 20 fps | 211 KB | 370-500 us (about 1 % of a core at most) |
+| Low | 80 x 60 | 8 fps | 23 KB | 7-35 us |
+| Medium | 160 x 120 | 12 fps | 94 KB | 160-275 us |
+| High | 240 x 180 | 20 fps | 211 KB | 370-575 us (about 1 % of a core at most) |
 
 The canvas is one byte per pixel (an index into one shared 35-colour palette); the memory column is that plus the RGBA buffer the
 texture upload needs. A test (`crates/fire-engine/tests/test_alloc.rs`) fails if a scene allocates while running, and switching style or

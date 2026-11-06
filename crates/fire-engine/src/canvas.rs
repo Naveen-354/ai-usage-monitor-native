@@ -9,7 +9,7 @@ pub const LW: usize = 80;
 pub const LH: usize = 60;
 
 /// A palette index. `Col(0)` is transparent.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Col(pub u8);
 
 macro_rules! palette {
@@ -82,6 +82,22 @@ pub mod pal {
 
     pub static PAL: [[u8; 4]; 64] = PAL_C;
     pub static ASH: [[u8; 4]; 64] = ash(PAL_C);
+
+    /// The bright palette colour closest to `rgb`: how an agent's own colour becomes one of the shared colours.
+    pub fn nearest_bright(rgb: [u8; 3]) -> Col {
+        const BRIGHT: [Col; 10] = [ORANGE, GREEN, BLUE, PURPLE, HOTPINK, YELLOW, CYAN, RED, MAGENTA, LTGREEN];
+        let dist = |c: Col| -> i32 {
+            let p = PAL_C[c.0 as usize];
+            (0..3).map(|i| (p[i] as i32 - rgb[i] as i32).pow(2)).sum()
+        };
+        let mut best = BRIGHT[0];
+        for c in BRIGHT {
+            if dist(c) < dist(best) {
+                best = c;
+            }
+        }
+        best
+    }
 }
 
 /// 3 x 5 pixel glyphs (three bits per row, left to right). Unknown characters draw as blanks.
@@ -366,6 +382,14 @@ mod tests {
         c.rect(30.0, 30.0, 4.0, 4.0, pal::SHADOW);
         c.outline(pal::OUTLINE);
         assert_eq!(lit(&c), 16 + 16 + 16 /* 4 sides x 4 */ , "a 4x4 block gains 16 edge pixels; the shadow gains none");
+    }
+
+    #[test]
+    fn an_agents_own_colour_becomes_the_nearest_bright_palette_colour() {
+        assert_eq!(pal::nearest_bright([255, 106, 0]), pal::ORANGE);
+        assert_eq!(pal::nearest_bright([40, 200, 100]), pal::GREEN);
+        assert_eq!(pal::nearest_bright([70, 130, 230]), pal::BLUE);
+        assert_eq!(pal::nearest_bright([0, 0, 0]).0 != 0, true, "never the transparent index");
     }
 
     #[test]

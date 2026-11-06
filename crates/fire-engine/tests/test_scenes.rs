@@ -177,6 +177,65 @@ fn the_same_seed_gives_the_same_pictures() {
     }
 }
 
+fn agents(n: u8) -> fire_engine::scene::Data {
+    use fire_engine::canvas::pal;
+    use fire_engine::scene::{AgentBar, Data};
+    let cols = [pal::ORANGE, pal::GREEN, pal::BLUE, pal::PURPLE, pal::HOTPINK, pal::YELLOW, pal::CYAN, pal::RED];
+    let mut d = Data { n_agents: n, ..Data::default() };
+    for i in 0..n as usize {
+        d.agents[i] = AgentBar { live: i % 2 == 0, share: 1.0 - i as f32 * 0.11, col: cols[i] };
+    }
+    d
+}
+
+#[test]
+fn the_data_scenes_draw_the_days_numbers() {
+    use fire_engine::scene::Data;
+    let paint = |style: Style, mode: FlameState, d: Data| {
+        let mut rng = XorShift64::new(7);
+        let mut a = create(style, Quality::Medium);
+        a.set_data(&d);
+        a.set_state(mode, 1.0, &mut rng);
+        if mode == FlameState::Live {
+            for _ in 0..6 {
+                a.tick(83.0, &mut rng);
+            }
+        }
+        frame(a.as_mut())
+    };
+    for mode in [FlameState::Live, FlameState::Idle] {
+        // the tank is as full as the day is
+        let (empty, full) = (Data { level: 0.05, ..Data::default() }, Data { level: 0.95, ..Data::default() });
+        assert_ne!(paint(Style::Tank, mode, empty), paint(Style::Tank, mode, full), "tank {mode:?}: the level is not drawn");
+        // the equalizer has one bar per agent, in that agent's colour
+        assert_ne!(paint(Style::Equalizer, mode, agents(2)), paint(Style::Equalizer, mode, agents(6)), "equalizer {mode:?}: the agents are not drawn");
+        let mut recoloured = agents(4);
+        recoloured.agents[0].col = fire_engine::canvas::pal::RED;
+        assert_ne!(paint(Style::Equalizer, mode, agents(4)), paint(Style::Equalizer, mode, recoloured), "equalizer {mode:?}: the agent colours are not drawn");
+    }
+}
+
+#[test]
+fn the_pulse_follows_the_recent_surges() {
+    // after a few surges the heartbeat is busier than the same moment with none
+    let run = |surges: usize| {
+        let mut rng = XorShift64::new(7);
+        let mut a = create(Style::Heartbeat, Quality::Medium);
+        a.set_state(FlameState::Live, 1.0, &mut rng);
+        for _ in 0..surges {
+            a.blast(5_000_000.0, &mut rng);
+            for _ in 0..3 {
+                a.tick(83.0, &mut rng);
+            }
+        }
+        for _ in 0..(12 - surges * 3) {
+            a.tick(83.0, &mut rng);
+        }
+        frame(a.as_mut())
+    };
+    assert_ne!(run(0), run(3), "the heartbeat ignores the token rate");
+}
+
 #[test]
 fn low_intensity_runs_slower_than_normal() {
     for s in scenes() {

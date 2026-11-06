@@ -29,6 +29,53 @@ pub struct Ctx {
     pub surge_len: f32,
     /// How big the last surge was, 0..=1 (log scaled).
     pub surge_mag: f32,
+    /// How busy the recent past was, 0..=1: every surge bumps it (a bigger jump, a bigger bump) and it fades with a
+    /// half-life of about four seconds. This is the token rate the pulse-like scenes follow.
+    pub activity: f32,
+    /// The day's data (how full the day is, one entry per agent). Only the data scenes need it.
+    pub data: Data,
+}
+
+impl Default for Ctx {
+    /// A quiet, still moment (idle, t = 0, no surge, no data): the base for tests (`Ctx { t: 2.0, ..Ctx::default() }`).
+    fn default() -> Self {
+        Ctx {
+            state: FlameState::Idle,
+            t: 0.0,
+            motion: 1.0,
+            detail: 0,
+            boost: 0.0,
+            surge_age: NO_SURGE_S,
+            surge_len: 1.0,
+            surge_mag: 0.0,
+            activity: 0.0,
+            data: Data::default(),
+        }
+    }
+}
+
+/// The most agents a scene can show.
+pub const MAX_AGENTS: usize = 8;
+
+/// One agent, as the equalizer-like scenes see it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AgentBar {
+    /// The agent recorded usage in the last minute.
+    pub live: bool,
+    /// Its tokens relative to the busiest agent, 0..=1.
+    pub share: f32,
+    /// A palette colour close to the agent's own colour.
+    pub col: Col,
+}
+
+/// The real numbers behind the picture, fed by the app (all zero until it has any).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Data {
+    /// How full the day is, 0..=1 on a log scale of tokens (0 = about a thousand or fewer, 1 = a billion or more).
+    pub level: f32,
+    /// The enabled agents that have numbers, in the app's order; only the first `n_agents` are meaningful.
+    pub agents: [AgentBar; MAX_AGENTS],
+    pub n_agents: u8,
 }
 
 pub trait Scene {
@@ -165,6 +212,8 @@ pub struct SceneEngine {
     surge_peak: f64,
     surge_mag: f32,
     surge_age_ms: f64,
+    activity: f64,
+    data: Data,
 }
 
 impl SceneEngine {
@@ -181,6 +230,8 @@ impl SceneEngine {
             surge_peak: 0.0,
             surge_mag: 0.0,
             surge_age_ms: NO_SURGE_S as f64 * 1000.0,
+            activity: 0.0,
+            data: Data::default(),
         }
     }
 
@@ -202,6 +253,8 @@ impl SceneEngine {
             surge_age: (self.surge_age_ms / 1000.0) as f32,
             surge_len: (self.surge_total_ms / 1000.0) as f32,
             surge_mag: self.surge_mag,
+            activity: self.activity as f32,
+            data: self.data,
         }
     }
 }
@@ -223,7 +276,12 @@ impl Animation for SceneEngine {
         self.surge_peak = 0.0;
         self.surge_mag = 0.0;
         self.surge_age_ms = NO_SURGE_S as f64 * 1000.0;
+        self.activity = 0.0;
         self.scene.reset(rng);
+    }
+
+    fn set_data(&mut self, data: &Data) {
+        self.data = *data;
     }
 
     fn blast(&mut self, delta: f64, rng: &mut dyn Rng) -> Option<Blast> {
@@ -236,6 +294,7 @@ impl Animation for SceneEngine {
         self.surge_left_ms = self.surge_total_ms;
         self.surge_mag = p.magnitude as f32;
         self.surge_age_ms = 0.0;
+        self.activity = (self.activity + 0.25 + 0.6 * p.magnitude).min(1.0);
         self.scene.surge(p.magnitude as f32, rng);
         Some(p)
     }
@@ -259,6 +318,7 @@ impl Animation for SceneEngine {
         self.clock_ms += ms;
         self.surge_left_ms = (self.surge_left_ms - ms).max(0.0);
         self.surge_age_ms += ms;
+        self.activity *= 0.5f64.powf(ms / 4000.0);
         let cx = self.ctx();
         self.scene.update((ms / 1000.0) as f32, &cx, rng);
     }

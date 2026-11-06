@@ -19,6 +19,32 @@ pub fn flame_state(overview: Option<&Overview>, now_ms: i64) -> FlameState {
     }
 }
 
+/// The day's numbers for the scenes that draw them: how full the day is, and one bar per enabled agent that has numbers.
+/// Nothing is invented: no overview, no numbers, an empty `Data`.
+pub fn scene_data(overview: Option<&Overview>, now_ms: i64) -> fire_engine::scene::Data {
+    use fire_engine::canvas::pal;
+    use fire_engine::scene::{AgentBar, Data, MAX_AGENTS};
+    let Some(o) = overview else { return Data::default() };
+    let mut d = Data::default();
+    // a thousand tokens or fewer is an empty tank, a billion or more a full one
+    if let Some(t) = o.totals {
+        d.level = (((t.total.max(1) as f64).log10() - 3.0) / 6.0).clamp(0.0, 1.0) as f32;
+    }
+    let with_numbers = || o.agents.iter().filter(|a| a.enabled && a.totals.is_some());
+    let biggest = with_numbers().filter_map(|a| a.totals).map(|t| t.total).max().unwrap_or(0).max(1) as f32;
+    for (i, a) in with_numbers().take(MAX_AGENTS).enumerate() {
+        let tokens = a.totals.map_or(0, |t| t.total) as f32;
+        let own = native_ui::web::agent_color(&a.color);
+        d.agents[i] = AgentBar {
+            live: native_ui::web::hero::is_live(a.last_event_utc_ms, now_ms),
+            share: (tokens / biggest).clamp(0.0, 1.0),
+            col: pal::nearest_bright([own.r(), own.g(), own.b()]),
+        };
+        d.n_agents = i as u8 + 1;
+    }
+    d
+}
+
 /// Animation intensity -> the engine's motion factor (0 = still frame only).
 pub fn motion_factor(i: AnimationIntensity) -> f64 {
     match i {
@@ -40,6 +66,15 @@ pub fn engine_style(s: AnimationStyle) -> fire_engine::Style {
         AnimationStyle::Cat => E::Cat,
         AnimationStyle::Muncher => E::Muncher,
         AnimationStyle::Spitter => E::Spitter,
+        AnimationStyle::Chicken => E::Chicken,
+        AnimationStyle::Snail => E::Snail,
+        AnimationStyle::Panda => E::Panda,
+        AnimationStyle::Octopus => E::Octopus,
+        AnimationStyle::Gum => E::Gum,
+        AnimationStyle::Heartbeat => E::Heartbeat,
+        AnimationStyle::Tank => E::Tank,
+        AnimationStyle::Equalizer => E::Equalizer,
+        AnimationStyle::Warp => E::Warp,
     }
 }
 
@@ -141,8 +176,32 @@ mod tests {
     }
 
     #[test]
+    fn the_scene_data_is_the_days_real_numbers_and_empty_without_any() {
+        assert_eq!(scene_data(None, NOW), fire_engine::scene::Data::default());
+        let mut o = mock::overview();
+        o.totals = None;
+        assert_eq!(scene_data(Some(&o), NOW).level, 0.0, "no numbers, no level");
+
+        let d = scene_data(Some(&mock::overview()), NOW);
+        assert!(d.level > 0.5 && d.level <= 1.0, "the demo day is a big one: {}", d.level);
+        assert!(d.n_agents >= 2 && d.n_agents as usize <= fire_engine::scene::MAX_AGENTS);
+        let shares: Vec<f32> = d.agents[..d.n_agents as usize].iter().map(|a| a.share).collect();
+        assert!(shares.iter().all(|s| (0.0..=1.0).contains(s)) && shares.contains(&1.0), "the busiest agent is a full bar: {shares:?}");
+        assert!(d.agents[..d.n_agents as usize].iter().all(|a| a.col.0 != 0), "every bar has a colour");
+    }
+
+    #[test]
+    fn a_disabled_agent_has_no_bar_and_an_agent_that_just_worked_is_live() {
+        let mut o = overview_with(Some(10_000), true);
+        let n_all = scene_data(Some(&o), NOW).n_agents;
+        assert!(scene_data(Some(&o), NOW).agents[0].live);
+        o.agents[0].enabled = false;
+        assert_eq!(scene_data(Some(&o), NOW).n_agents, n_all - 1);
+    }
+
+    #[test]
     fn every_setting_value_maps_to_its_own_engine_value() {
-        let styles = [AnimationStyle::Fire, AnimationStyle::Hamster, AnimationStyle::Duck, AnimationStyle::Slots, AnimationStyle::Pig, AnimationStyle::Cat, AnimationStyle::Muncher, AnimationStyle::Spitter];
+        let styles = [AnimationStyle::Fire, AnimationStyle::Hamster, AnimationStyle::Duck, AnimationStyle::Slots, AnimationStyle::Pig, AnimationStyle::Cat, AnimationStyle::Muncher, AnimationStyle::Spitter, AnimationStyle::Chicken, AnimationStyle::Snail, AnimationStyle::Panda, AnimationStyle::Octopus, AnimationStyle::Gum, AnimationStyle::Heartbeat, AnimationStyle::Tank, AnimationStyle::Equalizer, AnimationStyle::Warp];
         let mapped: Vec<_> = styles.iter().map(|s| engine_style(*s)).collect();
         assert_eq!(mapped, fire_engine::Style::ALL, "same order, one engine style per setting value");
         assert_eq!(engine_quality(AnimationQuality::Low), fire_engine::Quality::Low);

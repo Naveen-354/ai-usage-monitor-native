@@ -2,6 +2,7 @@
 
 use crate::blast::Blast;
 use crate::engine::{FireEngine, FlameState};
+use crate::scene::Data;
 use crate::sim::{FIRE_H, FIRE_W};
 use crate::Rng;
 
@@ -17,10 +18,40 @@ pub enum Style {
     Cat,
     Muncher,
     Spitter,
+    Chicken,
+    Snail,
+    Panda,
+    Octopus,
+    Gum,
+    /// Follows the recent token rate.
+    Heartbeat,
+    /// Its level is how full the day is.
+    Tank,
+    /// One bar per agent.
+    Equalizer,
+    Warp,
 }
 
 impl Style {
-    pub const ALL: [Style; 8] = [Style::Fire, Style::Hamster, Style::Duck, Style::Slots, Style::Pig, Style::Cat, Style::Muncher, Style::Spitter];
+    pub const ALL: [Style; 17] = [
+        Style::Fire,
+        Style::Hamster,
+        Style::Duck,
+        Style::Slots,
+        Style::Pig,
+        Style::Cat,
+        Style::Muncher,
+        Style::Spitter,
+        Style::Chicken,
+        Style::Snail,
+        Style::Panda,
+        Style::Octopus,
+        Style::Gum,
+        Style::Heartbeat,
+        Style::Tank,
+        Style::Equalizer,
+        Style::Warp,
+    ];
 }
 
 /// How sharp and how smooth the animated scenes are. The classic flame ignores it (it is always its own 80 x 60 self).
@@ -70,6 +101,8 @@ pub trait Animation {
     /// Texture size in pixels. Fixed for the life of the animation (a quality change builds a new one).
     fn dims(&self) -> (usize, usize);
     fn set_state(&mut self, mode: FlameState, motion: f64, rng: &mut dyn Rng);
+    /// The day's numbers, for the scenes that draw them (the flame ignores them).
+    fn set_data(&mut self, _data: &Data) {}
     /// A sudden jump of `delta` tokens. `None` when the animation is off or there is no motion to show it with.
     fn blast(&mut self, delta: f64, rng: &mut dyn Rng) -> Option<Blast>;
     fn needs_loop(&self) -> bool;

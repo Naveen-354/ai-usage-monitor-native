@@ -27,7 +27,7 @@ use native_ui::web::{with_alpha, Tokens};
 use crate::backend::AppBackend;
 use crate::bridge;
 use crate::anim_host::AnimHost;
-use crate::flame::{engine_quality, engine_style, flame_state, motion_factor, next_period, period_word, pop_scale};
+use crate::flame::{engine_quality, engine_style, flame_state, motion_factor, next_period, period_word, pop_scale, scene_data};
 use crate::layout::default_compact_size;
 use crate::placement::{self, Area};
 use crate::shell::{HotkeyKind, OverlayShared, Shell, ShellEvent};
@@ -495,6 +495,7 @@ impl App {
     fn step_fire_and_counter(&mut self, now: Instant, now_ms: i64, settings: &Settings) {
         // The chosen animation and quality (a change drops the old animation and builds the new one).
         self.fire.configure(engine_style(settings.animation_style), engine_quality(settings.animation_quality));
+        self.fire.set_data(scene_data(self.store.overview.as_ref(), now_ms));
         self.fire.step(now, flame_state(self.store.overview.as_ref(), now_ms), motion_factor(settings.animation_intensity));
 
         // A sudden jump in the total fires a burst scaled to its size.
@@ -538,6 +539,7 @@ impl App {
         let motion = motion_factor(settings.animation_intensity);
         let host = self.preview.get_or_insert_with(|| AnimHost::new("preview", style, quality));
         host.configure(style, quality);
+        host.set_data(scene_data(self.store.overview.as_ref(), chrono::Utc::now().timestamp_millis()));
         host.step(now, FlameState::Live, motion);
         if now.duration_since(self.preview_surge_at) >= PREVIEW_SURGE_EVERY {
             self.preview_surge_at = now;

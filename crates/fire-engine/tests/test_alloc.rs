@@ -52,7 +52,11 @@ fn running_and_painting_a_scene_never_allocates() {
                 anim.paint(&mut buf);
             }
             let before = allocations();
+            let mut data = fire_engine::scene::Data::default();
             for i in 0..120 {
+                data.level = (i % 20) as f32 / 20.0;
+                data.n_agents = (i % 8 + 1) as u8;
+                anim.set_data(&data);
                 if i % 20 == 0 {
                     anim.blast(10f64.powi(3 + (i / 20) % 5), &mut rng);
                 }

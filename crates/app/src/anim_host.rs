@@ -9,6 +9,7 @@ use std::time::Instant;
 use egui::{ColorImage, Context, TextureHandle, TextureId, TextureOptions};
 use fire_engine::blast::Blast;
 use fire_engine::engine::FlameState;
+use fire_engine::scene::Data;
 use fire_engine::{create, Animation, Quality, Style, XorShift64};
 
 pub struct AnimHost {
@@ -23,6 +24,8 @@ pub struct AnimHost {
     last_update: Instant,
     accum_ms: f64,
     motion: f64,
+    /// The day's numbers the scenes that draw them are shown (kept so a new animation gets them straight away).
+    data: Data,
 }
 
 impl AnimHost {
@@ -41,6 +44,16 @@ impl AnimHost {
             last_update: Instant::now(),
             accum_ms: 0.0,
             motion: 1.0,
+            data: Data::default(),
+        }
+    }
+
+    /// The day's numbers. A change repaints (a still pose, like an idle tank, then shows the new level).
+    pub fn set_data(&mut self, data: Data) {
+        if data != self.data {
+            self.data = data;
+            self.anim.set_data(&data);
+            self.dirty = true;
         }
     }
 
@@ -72,6 +85,7 @@ impl AnimHost {
         self.quality = quality;
         let (w, h) = self.anim.dims();
         self.pixels = vec![0; w * h * 4]; // exactly the new size: the old buffer is freed, not kept
+        self.anim.set_data(&self.data);
         self.anim.set_state(mode, self.motion, &mut self.rng);
         self.accum_ms = 0.0;
         self.dirty = true;

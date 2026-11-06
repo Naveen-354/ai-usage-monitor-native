@@ -85,7 +85,7 @@ const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 const CORNERS: [(Corner, &str); 5] = [(Corner::TopRight, "Top right"), (Corner::TopLeft, "Top left"), (Corner::BottomRight, "Bottom right"), (Corner::BottomLeft, "Bottom left"), (Corner::Custom, "Custom (dragged)")];
 
 /// The animations on offer, in the order of the drop-down.
-pub const STYLES: [(AnimationStyle, &str); 8] = [
+pub const STYLES: [(AnimationStyle, &str); 17] = [
     (AnimationStyle::Fire, "Fire (classic)"),
     (AnimationStyle::Hamster, "Hamster wheel"),
     (AnimationStyle::Duck, "Rubber duck"),
@@ -94,6 +94,15 @@ pub const STYLES: [(AnimationStyle, &str); 8] = [
     (AnimationStyle::Cat, "Typing cat"),
     (AnimationStyle::Muncher, "Token muncher"),
     (AnimationStyle::Spitter, "Token spitter"),
+    (AnimationStyle::Chicken, "Golden egg chicken"),
+    (AnimationStyle::Snail, "Turbo snail"),
+    (AnimationStyle::Panda, "Sneezing panda"),
+    (AnimationStyle::Octopus, "Multitasking octopus"),
+    (AnimationStyle::Gum, "Bubble gum pop"),
+    (AnimationStyle::Heartbeat, "Heartbeat monitor (token rate)"),
+    (AnimationStyle::Tank, "Water tank (the day's tokens)"),
+    (AnimationStyle::Equalizer, "Agent equalizer (one bar each)"),
+    (AnimationStyle::Warp, "Starfield warp"),
 ];
 pub const QUALITIES: [(AnimationQuality, &str); 3] = [(AnimationQuality::Low, "Low (lightest)"), (AnimationQuality::Medium, "Medium"), (AnimationQuality::High, "High (sharpest)")];
 /// What each quality costs, said under the picker. The canvas is one byte per pixel, so even High stays far under a megabyte.

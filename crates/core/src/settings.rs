@@ -51,6 +51,15 @@ pub enum AnimationStyle {
     Cat,
     Muncher,
     Spitter,
+    Chicken,
+    Snail,
+    Panda,
+    Octopus,
+    Gum,
+    Heartbeat,
+    Tank,
+    Equalizer,
+    Warp,
 }
 
 /// How sharp and smooth the animated scenes are (canvas size and frame rate). Memory stays tiny at every level.

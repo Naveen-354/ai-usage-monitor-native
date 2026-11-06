@@ -135,7 +135,7 @@ impl Scene for Spitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn cx(state: FlameState, t: f32) -> Ctx { Ctx { state, t, motion: 1.0, detail: 1, boost: 0.0, surge_age: 1.0e6, surge_len: 1.0, surge_mag: 0.0 } }
+    fn cx(state: FlameState, t: f32) -> Ctx { Ctx { state, t, motion: 1.0, detail: 1, boost: 0.0, surge_age: 1.0e6, surge_len: 1.0, surge_mag: 0.0, ..Ctx::default() } }
     #[test]
     fn idle_and_off_do_not_move_with_the_clock() {
         let (mut a, mut b) = (Canvas::new(2), Canvas::new(2)); let s = Spitter::new();

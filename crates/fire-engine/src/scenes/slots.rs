@@ -212,7 +212,7 @@ mod tests {
     use crate::XorShift64;
 
     fn ctx(state: FlameState, boost: f32, age: f32) -> Ctx {
-        Ctx { state, t: 5.0, motion: 1.0, detail: 2, boost, surge_age: age, surge_len: 2.0, surge_mag: 1.0 }
+        Ctx { state, t: 5.0, motion: 1.0, detail: 2, boost, surge_age: age, surge_len: 2.0, surge_mag: 1.0, ..Ctx::default() }
     }
 
     fn shown(i: usize, cx: &Ctx) -> i32 {

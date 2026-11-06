@@ -207,7 +207,7 @@ impl Scene for Pig {
 mod tests {
     use super::*;
 
-    fn cx(state: FlameState, t: f32, detail: u8) -> Ctx { Ctx { state, t, motion: 1.0, detail, boost: 0.0, surge_age: 1.0e6, surge_len: 1.0, surge_mag: 0.0 } }
+    fn cx(state: FlameState, t: f32, detail: u8) -> Ctx { Ctx { state, t, motion: 1.0, detail, boost: 0.0, surge_age: 1.0e6, surge_len: 1.0, surge_mag: 0.0, ..Ctx::default() } }
 
     #[test]
     fn an_idle_pig_looks_the_same_whatever_the_clock_says() {
