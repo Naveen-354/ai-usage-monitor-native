@@ -62,6 +62,9 @@ struct MainWindow {
     /// Diagnostics data, refreshed once a second while that page is showing.
     diag: Option<(Instant, AppInfo, view::OverlayDiagnostics)>,
     status: Option<String>,
+    /// The agent the Statistics page shows on its heat map (picked by clicking its row); `None` = ALL of them. Forgotten
+    /// when the window is closed, so it always opens on ALL.
+    agent: Option<String>,
 }
 
 pub struct App {
@@ -111,8 +114,9 @@ pub struct App {
 /// The daily totals the heat map draws, and what they were read for.
 struct HeatCache {
     at: Instant,
-    /// The settings that change what is counted; a change re-reads at once.
-    key: (bool, Vec<String>),
+    /// What the days were read for: the settings that change what is counted (cached tokens, enabled agents) and the agent
+    /// picked on the page. A change re-reads at once.
+    key: (bool, Vec<String>, Option<String>),
     /// `None` = they could not be read (the page then says so instead of drawing zeros).
     days: Option<Vec<view::DayTotal>>,
 }
@@ -143,7 +147,7 @@ impl App {
             handled_surge: 0,
             floater: None,
             popping: None,
-            main: MainWindow { open: open_page.is_some(), page: open_page.unwrap_or(Page::Statistics), diag: None, status: None },
+            main: MainWindow { open: open_page.is_some(), page: open_page.unwrap_or(Page::Statistics), diag: None, status: None, agent: None },
             shell,
             shared,
             overlay_visible: true,
@@ -680,7 +684,7 @@ impl App {
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(more));
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut inner, |ui| {
                 egui::Frame::none().inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 14.0, bottom: 16.0 }).show(ui, |ui| {
-                    let props = all_agents::Props { tokens: t, overview: self.store.overview.as_ref(), settings, now_ms, time_ms: self.started.elapsed().as_millis() as u64, hide_headline: true };
+                    let props = all_agents::Props { tokens: t, overview: self.store.overview.as_ref(), settings, now_ms, time_ms: self.started.elapsed().as_millis() as u64, hide_headline: true, selected: None };
                     actions = all_agents::show(ui, &props);
                     open = all_agents::overlay_actions(ui, &t);
                 });
@@ -690,7 +694,11 @@ impl App {
         for a in actions {
             match a {
                 AgentsAction::Period(p) => self.patch(SettingsPatch { period: Some(p), ..Default::default() }),
-                AgentsAction::OpenAgent(_) => self.open_page(Page::Statistics),
+                // Opening an agent from the overlay lands on the Statistics page already narrowed to it.
+                AgentsAction::OpenAgent(id) => {
+                    self.main.agent = Some(id);
+                    self.open_page(Page::Statistics);
+                }
             }
         }
         match open {
@@ -716,22 +724,31 @@ impl App {
     }
 
     /// Reads the daily totals for the heat map: when the Statistics page is first shown, then at most every few seconds,
-    /// and at once when a setting that changes what is counted (enabled agents, cached tokens) changes.
+    /// and at once when something that changes what is counted changes: the enabled agents, cached tokens, or the agent
+    /// picked on the page.
     fn refresh_heatmap(&mut self, ctx: &egui::Context, settings: &Settings) {
-        let key = (settings.count_cached_in_total, settings.enabled_agents.clone());
+        let key = (settings.count_cached_in_total, settings.enabled_agents.clone(), self.main.agent.clone());
         if self.heat.as_ref().is_some_and(|h| h.key == key && h.at.elapsed() < HEATMAP_REFRESH) {
             return;
         }
-        let days = self.backend.daily_totals(heatmap::DAYS).ok();
+        let days = self.backend.daily_totals(heatmap::DAYS, self.main.agent.as_deref()).ok();
         self.heat = Some(HeatCache { at: Instant::now(), key, days });
         ctx.request_repaint_after(HEATMAP_REFRESH);
     }
 
     fn main_window(&mut self, ctx: &egui::Context, settings: &Settings) {
         if self.main.page == Page::Statistics {
+            // An agent that is no longer listed and enabled (turned off in Settings, say) cannot stay picked: back to ALL.
+            if let Some(o) = &self.store.overview {
+                if all_agents::picked(self.main.agent.as_deref(), &o.agents).is_none() {
+                    self.main.agent = None;
+                }
+            }
             self.refresh_heatmap(ctx, settings);
         }
         let heat_days: Option<Vec<view::DayTotal>> = self.heat.as_ref().and_then(|h| h.days.clone());
+        let selected: Option<String> = self.main.agent.clone();
+        let mut pick: Option<Option<String>> = None; // Some(None) = ALL was pressed
         let today = chrono::Local::now().date_naive();
         let t = Tokens::for_theme(settings.theme);
         let mut page = self.main.page;
@@ -769,21 +786,29 @@ impl App {
                 }
                 scroll.show(ui, |ui| match page {
                     Page::Statistics => pages::page(ui, |ui| {
-                        heatmap::show(
+                        let agents = overview.as_ref().map(|o| o.agents.as_slice()).unwrap_or(&[]);
+                        let agent = all_agents::picked(selected.as_deref(), agents);
+                        let pressed_all = heatmap::show(
                             ui,
                             &heatmap::Props {
                                 tokens: t,
                                 days: heat_days.as_deref(),
-                                has_numbers: overview.as_ref().is_some_and(|o| o.totals.is_some()),
+                                // one agent: whether it has numbers; all of them: whether any does
+                                has_numbers: agent.map_or_else(|| overview.as_ref().is_some_and(|o| o.totals.is_some()), |a| a.totals.is_some()),
                                 today,
                                 week_start: settings.week_starts_on,
+                                agent: agent.map(|a| heatmap::AgentFilter { name: &a.name, color: native_ui::web::agent_color(&a.color) }),
                             },
                         );
+                        if pressed_all {
+                            pick = Some(None);
+                        }
                         ui.add_space(24.0);
-                        let props = all_agents::Props { tokens: t, overview: overview.as_ref(), settings, now_ms, time_ms, hide_headline: false };
+                        let props = all_agents::Props { tokens: t, overview: overview.as_ref(), settings, now_ms, time_ms, hide_headline: false, selected: agent.map(|a| a.id.as_str()) };
                         for a in all_agents::show(ui, &props) {
-                            if let AgentsAction::Period(p) = a {
-                                period = Some(p);
+                            match a {
+                                AgentsAction::Period(p) => period = Some(p),
+                                AgentsAction::OpenAgent(id) => pick = Some(Some(id)),
                             }
                         }
                     }),
@@ -803,8 +828,12 @@ impl App {
         });
 
         self.main.page = page;
+        if let Some(p) = pick {
+            self.main.agent = p;
+        }
         if close {
             self.main.open = false;
+            self.main.agent = None; // the window opens on ALL again next time
         }
         if let Some(p) = period {
             self.patch(SettingsPatch { period: Some(p), ..Default::default() });

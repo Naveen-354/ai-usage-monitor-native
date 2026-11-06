@@ -141,12 +141,40 @@ fn splitmix64(mut x: u64) -> u64 {
 /// Synthetic activity for the heat map: the `days` days ending at `today`, ascending, only days with usage. It has the
 /// rhythm of real work (quiet weekends, idle days, busy and slow weeks, more recent activity) and is repeatable; today
 /// equals the fixture overview's own total, so the Statistics page agrees with itself.
-pub fn daily_totals(today: NaiveDate, days: u32) -> Vec<DayTotal> {
-    let today_total = overview().totals.map(|t| t.total).unwrap_or(0);
+///
+/// With `agent` it is that agent's share of the same activity: a subset of the days, never busier than the day as a
+/// whole, and today equal to the agent's own fixture total. An agent with no numbers (or an unknown one) has no days.
+pub fn daily_totals(today: NaiveDate, days: u32, agent: Option<&str>) -> Vec<DayTotal> {
+    let fixture = overview();
+    let today_total = fixture.totals.map(|t| t.total).unwrap_or(0);
+    // (the agent's total today, a number that makes its days differ from every other agent's)
+    let own = match agent {
+        None => None,
+        Some(id) => {
+            let mine = fixture.agents.iter().find(|a| a.id == id && a.enabled).and_then(|a| a.totals).map_or(0, |t| t.total);
+            if mine == 0 || today_total == 0 {
+                return Vec::new();
+            }
+            Some((mine, id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))))
+        }
+    };
     let mut out = Vec::new();
     for back in (0..days).rev() {
         let date = today - Duration::days(i64::from(back));
-        let total = if back == 0 { today_total } else { synthetic_day(back, date) };
+        let all = if back == 0 { today_total } else { synthetic_day(back, date) };
+        let total = match own {
+            None => all,
+            Some((mine, _)) if back == 0 => mine,
+            Some((mine, seed)) => {
+                let h = splitmix64(u64::from(back) ^ seed);
+                if all == 0 || h % 100 < 30 {
+                    0 // this agent sat the day out
+                } else {
+                    let jitter = 0.5 + ((h >> 8) % 1_000) as f64 / 1_000.0; // 0.5 ..= 1.5 of its usual share
+                    ((all as f64 * mine as f64 / today_total as f64 * jitter) as u64).clamp(1, all)
+                }
+            }
+        };
         if total > 0 {
             out.push(DayTotal { date: date.format("%Y-%m-%d").to_string(), total });
         }
@@ -237,16 +265,45 @@ mod tests {
     #[test]
     fn the_fixture_heat_map_is_ascending_repeatable_and_ends_with_the_days_own_total() {
         let today = today();
-        let days = daily_totals(today, 371);
+        let days = daily_totals(today, 371, None);
         assert!(days.len() > 150 && days.len() < 371, "some idle days, mostly busy ones: {}", days.len());
         assert!(days.windows(2).all(|w| w[0].date < w[1].date), "ascending, no duplicates");
         assert!(days.iter().all(|d| d.total > 0), "only days with usage are listed");
         let last = days.last().unwrap();
         assert_eq!(last.date, today.format("%Y-%m-%d").to_string());
         assert_eq!(Some(last.total), overview().totals.map(|t| t.total), "the Statistics page must agree with itself");
-        assert_eq!(days, daily_totals(today, 371), "repeatable");
-        assert_eq!(daily_totals(today, 1).len(), 1);
-        assert!(daily_totals(today, 0).is_empty());
+        assert_eq!(days, daily_totals(today, 371, None), "repeatable");
+        assert_eq!(daily_totals(today, 1, None).len(), 1);
+        assert!(daily_totals(today, 0, None).is_empty());
+    }
+
+    #[test]
+    fn the_fixture_heat_map_of_one_agent_is_a_part_of_the_whole() {
+        let today = today();
+        let all = daily_totals(today, 371, None);
+        let fixture = overview();
+        for a in fixture.agents.iter().filter(|a| a.totals.is_some()) {
+            let mine = daily_totals(today, 371, Some(&a.id));
+            assert!(!mine.is_empty() && mine.len() < all.len(), "{}: {} of {} days", a.id, mine.len(), all.len());
+            assert!(mine.windows(2).all(|w| w[0].date < w[1].date), "{}: ascending", a.id);
+            for d in &mine {
+                let whole = all.iter().find(|x| x.date == d.date).unwrap_or_else(|| panic!("{} has a day ({}) the whole does not", a.id, d.date));
+                assert!(d.total > 0 && d.total <= whole.total, "{} on {}: {} of {}", a.id, d.date, d.total, whole.total);
+            }
+            assert_eq!(mine.last().map(|d| d.total), a.totals.map(|t| t.total), "{}: today is the agent's own total", a.id);
+            assert_eq!(mine, daily_totals(today, 371, Some(&a.id)), "{}: repeatable", a.id);
+        }
+        let claude = daily_totals(today, 371, Some("claude"));
+        let codex = daily_totals(today, 371, Some("codex"));
+        assert_ne!(claude, codex, "agents do not look alike");
+    }
+
+    #[test]
+    fn an_agent_without_numbers_or_an_unknown_one_has_no_days() {
+        let today = today();
+        let no_numbers = overview().agents.into_iter().find(|a| a.totals.is_none()).expect("the fixture has an agent without numbers");
+        assert!(daily_totals(today, 371, Some(&no_numbers.id)).is_empty());
+        assert!(daily_totals(today, 371, Some("no-such-agent")).is_empty());
     }
 
     #[test]

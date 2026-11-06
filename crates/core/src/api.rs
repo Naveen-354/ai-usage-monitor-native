@@ -109,11 +109,12 @@ impl Core {
     }
 
     /// One total per local calendar day for the `days` days up to and including today, only days that had usage
-    /// (see [`daily_totals`]); this is what the Statistics page's activity heat map draws.
-    pub fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>> {
+    /// (see [`daily_totals`]); this is what the Statistics page's activity heat map draws. `agent` limits it to one
+    /// agent's usage, `None` is all of them.
+    pub fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>> {
         let settings = self.settings.get();
         let today = Local::now().date_naive();
-        self.db.with_reader(|c| aggregation::daily_totals(c, &settings, &Local, today, days))
+        self.db.with_reader(|c| aggregation::daily_totals(c, &settings, &Local, today, days, agent))
     }
 
     pub fn settings(&self) -> Settings {
@@ -243,7 +244,7 @@ mod tests {
         use crate::model::{Accuracy, UsageEvent};
         let dir = tempfile::tempdir().unwrap();
         let core = core_in(&dir);
-        assert!(core.daily_totals(371).unwrap().is_empty(), "no usage yet means no entries, not zeros");
+        assert!(core.daily_totals(371, None).unwrap().is_empty(), "no usage yet means no entries, not zeros");
         let now = Utc::now();
         let event = UsageEvent {
             agent: "claude",
@@ -261,10 +262,12 @@ mod tests {
             dedupe_key: "k".into(),
         };
         core.db.commit(&Batch { agent: "claude", events: vec![event], cursors: vec![] }).unwrap();
-        let got = core.daily_totals(371).unwrap();
+        let got = core.daily_totals(371, None).unwrap();
         assert_eq!(got, vec![DayTotal { date: now.with_timezone(&Local).date_naive(), total: 160 }]);
+        assert_eq!(core.daily_totals(371, Some("claude")).unwrap(), got, "picking the only agent that has usage changes nothing");
+        assert!(core.daily_totals(371, Some("codex")).unwrap().is_empty(), "another agent has none");
         core.update_settings(&serde_json::json!({"countCachedInTotal": false})).unwrap();
-        assert_eq!(core.daily_totals(371).unwrap()[0].total, 110, "the heat map follows the cached-tokens setting like the totals do");
+        assert_eq!(core.daily_totals(371, None).unwrap()[0].total, 110, "the heat map follows the cached-tokens setting like the totals do");
         core.shutdown();
     }
 

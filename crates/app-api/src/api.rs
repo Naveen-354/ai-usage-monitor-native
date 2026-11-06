@@ -73,8 +73,9 @@ pub trait Backend: Send + Sync {
     fn overview(&self, period: PeriodOrCustom, from: Option<String>, to: Option<String>) -> Result<Overview, BackendError>;
     fn history(&self, period: PeriodOrCustom, from: Option<String>, to: Option<String>) -> Result<History, BackendError>;
     /// One total per local calendar day for the `days` days up to and including today (ascending; days without usage are
-    /// left out). Counts the same things the overview counts. This is what the activity heat map draws.
-    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError>;
+    /// left out). Counts the same things the overview counts. This is what the activity heat map draws. `agent` (an
+    /// agent id) limits it to that one agent's usage; `None` is every enabled agent.
+    fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError>;
     fn settings(&self) -> Result<Settings, BackendError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<Settings, BackendError>;
     fn app_info(&self) -> Result<AppInfo, BackendError>;

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use chrono::{Datelike, Duration, NaiveDate};
 use egui::{vec2, Color32, Id, LayerId, Order, Pos2, Rect, Sense, Ui, Vec2};
 
-use super::paint::{border, hard_shadow};
+use super::paint::{border, hard_shadow, over};
 use super::text::{Run, Style, Weight};
 use super::widgets::{h2_style, put};
 use super::wrap::measure;
@@ -160,13 +160,6 @@ pub fn tooltip(date: NaiveDate, total: u64) -> String {
     }
 }
 
-/// `fg` over `bg` at opacity `a`, blended in sRGB the way CSS does and returned opaque. (egui premultiplies translucent
-/// colours in linear light, which would make a 10 % tint come out as roughly 37 % - far brighter than the browser's.)
-fn over(bg: Color32, fg: Color32, a: f32) -> Color32 {
-    let ch = |b: u8, f: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * a).round() as u8;
-    Color32::from_rgb(ch(bg.r(), fg.r()), ch(bg.g(), fg.g()), ch(bg.b(), fg.b()))
-}
-
 /// The colour of a square: `ink` at a whisper for no usage, then the accent colour in four strengths.
 pub fn level_color(t: &Tokens, level: u8) -> Color32 {
     match level {
@@ -186,23 +179,108 @@ pub fn weekday_labels(week_start: u8) -> [(usize, &'static str); 3] {
 
 // ------------------------------------------------------------------------------------------------ painting
 
+/// The one agent the heat map is narrowed to (what the header's scope switch names next to ALL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentFilter<'a> {
+    pub name: &'a str,
+    pub color: Color32,
+}
+
 pub struct Props<'a> {
     pub tokens: Tokens,
     /// Days with usage, ascending (see `Backend::daily_totals`); `None` when they could not be read.
     pub days: Option<&'a [DayTotal]>,
-    /// Does any enabled agent have numbers at all? If not (and there are no days) the honest line is "unavailable", not 0.
+    /// Does the agent shown (any enabled agent, when none is picked) have numbers at all? If not (and there are no days)
+    /// the honest line is "unavailable", not 0.
     pub has_numbers: bool,
     pub today: NaiveDate,
     /// 0 = Sunday … 6 = Saturday (the "Week starts on" setting).
     pub week_start: u8,
+    /// `None` = the days are every agent's together; `Some` = they are this agent's alone.
+    pub agent: Option<AgentFilter<'a>>,
 }
 
 fn small() -> Style {
     Style::mono(10.0, Weight::W400).lh_px(13.5)
 }
 
-/// Paints the section (heading, box of squares, legend) at the full available width.
-pub fn show(ui: &mut Ui, p: &Props) {
+// ------------------------------------------------------------------------------------------------ scope switch
+
+/// Gap between the heading and the switch.
+const SWITCH_GAP: f32 = 16.0;
+/// Space at either side of the text inside a segment.
+const SEG_PAD: f32 = 10.0;
+/// The agent's coloured square inside its segment, and the gap after it.
+const DOT: f32 = 9.0;
+const DOT_GAP: f32 = 6.0;
+
+fn switch_style() -> Style {
+    Style::mono(10.0, Weight::W700).spacing_em(0.1).lh_px(13.5)
+}
+
+/// Where the segments of the scope switch are, measured from its left edge: `ALL`, and the agent's when one is picked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SwitchLayout {
+    /// (left, width) of the ALL segment.
+    pub all: (f32, f32),
+    /// (left, width) of the agent's segment.
+    pub agent: Option<(f32, f32)>,
+    pub width: f32,
+}
+
+/// Lays the switch out from the width of its two texts (`all_w` for "ALL", `agent_w` for the agent's name, if any).
+pub fn switch_layout(all_w: f32, agent_w: Option<f32>) -> SwitchLayout {
+    let all = (BW, all_w + 2.0 * SEG_PAD);
+    match agent_w {
+        None => SwitchLayout { all, agent: None, width: all.0 + all.1 + BW },
+        Some(w) => {
+            let left = all.0 + all.1 + BW; // the divider
+            let seg = (left, DOT + DOT_GAP + w + 2.0 * SEG_PAD);
+            SwitchLayout { all, agent: Some(seg), width: seg.0 + seg.1 + BW }
+        }
+    }
+}
+
+/// `[ ALL ]` when every agent is shown, `[ ALL | ■ CLAUDE ]` when one is: the filled segment is what the squares are of.
+/// Pressing ALL goes back to every agent. Painted with its top-left at `at`; returns (ALL was pressed, right edge).
+fn scope_switch(ui: &mut Ui, t: &Tokens, agent: Option<AgentFilter>, at: Pos2) -> (bool, f32) {
+    let st = switch_style();
+    let name = agent.map(|a| a.name.to_uppercase());
+    let all_run = Run::new(ui.ctx(), "ALL", &st);
+    let name_run = name.as_deref().map(|n| Run::new(ui.ctx(), n, &st));
+    let lay = switch_layout(all_run.width, name_run.as_ref().map(|r| r.width));
+
+    let rect = Rect::from_min_size(at, vec2(lay.width, BAR_H));
+    let (top, inner_h) = (rect.top() + BW, rect.height() - 2.0 * BW);
+    let seg = |(left, w): (f32, f32)| Rect::from_min_size(Pos2::new(rect.left() + left, top), vec2(w, inner_h));
+
+    let all_rect = seg(lay.all);
+    let resp = ui.interact(all_rect, ui.id().with("activity-all"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let all_active = agent.is_none();
+    if all_active {
+        ui.painter().rect_filled(all_rect, 0.0, t.ink);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(all_rect, 0.0, over(t.bg, t.ink, 0.18));
+    }
+    all_run.paint(ui.painter(), all_rect.left() + SEG_PAD, top + (inner_h - st.line_h) / 2.0, if all_active { t.bg } else { t.ink });
+
+    if let (Some(a), Some(run), Some(layout)) = (agent, name_run, lay.agent) {
+        let r = seg(layout);
+        let p = ui.painter();
+        p.rect_filled(Rect::from_min_size(Pos2::new(r.left() - BW, top), vec2(BW, inner_h)), 0.0, t.ink); // divider
+        p.rect_filled(r, 0.0, t.ink);
+        let dot = Rect::from_min_size(Pos2::new(r.left() + SEG_PAD, r.center().y - DOT / 2.0), Vec2::splat(DOT));
+        p.rect_filled(dot.expand(1.0), 0.0, t.bg); // a thin bg frame keeps any agent colour visible on the ink
+        p.rect_filled(dot, 0.0, a.color);
+        run.paint(p, dot.right() + DOT_GAP, top + (inner_h - st.line_h) / 2.0, t.bg);
+    }
+    border(ui.painter(), rect, BW, t.ink);
+    (resp.clicked() && agent.is_some(), rect.right())
+}
+
+/// Paints the section (heading, scope switch, box of squares, legend) at the full available width. Returns true when
+/// the user pressed ALL to go back from one agent to every agent.
+pub fn show(ui: &mut Ui, p: &Props) -> bool {
     let t = p.tokens;
     let width = ui.available_width();
     let weeks = weeks_that_fit(width);
@@ -221,10 +299,11 @@ pub fn show(ui: &mut Ui, p: &Props) {
     let visible_total = values.iter().fold(0u64, |a, &b| a.saturating_add(b));
     let unavailable = p.days.is_none() || (by_date.is_empty() && !p.has_numbers);
 
-    // ACTIVITY ......................................... 358M tokens in the last year
+    // ACTIVITY [ALL | ■ CLAUDE] ........................ 358M tokens in the last year
     let (bar, _) = ui.allocate_exact_size(vec2(width, BAR_H), Sense::hover());
     let h2 = h2_style();
-    put(ui, "ACTIVITY", &h2, bar.left(), bar.top() + (BAR_H - h2.line_h) / 2.0, t.ink);
+    let title_w = put(ui, "ACTIVITY", &h2, bar.left(), bar.top() + (BAR_H - h2.line_h) / 2.0, t.ink);
+    let (show_all, controls_right) = scope_switch(ui, &t, p.agent, Pos2::new(bar.left() + title_w + SWITCH_GAP, bar.top()));
     let (text, weight, color) = if unavailable {
         (super::all_agents::UNAVAILABLE_TEXT.to_string(), Weight::W700, t.alert)
     } else {
@@ -232,7 +311,10 @@ pub fn show(ui: &mut Ui, p: &Props) {
     };
     let st = Style::mono(11.0, weight);
     let run = Run::new(ui.ctx(), &text, &st);
-    run.paint(ui.painter(), bar.right() - run.width, bar.top() + (BAR_H - st.line_h) / 2.0, color);
+    let caption_left = bar.right() - run.width;
+    if caption_left >= controls_right + SWITCH_GAP {
+        run.paint(ui.painter(), caption_left, bar.top() + (BAR_H - st.line_h) / 2.0, color);
+    }
     ui.add_space(12.0);
 
     // the box
@@ -285,6 +367,7 @@ pub fn show(ui: &mut Ui, p: &Props) {
         let total = by_date.get(&date).copied().unwrap_or(0);
         draw_tooltip(ui, &t, pointer, &if unavailable { date.format("%a, %b %-d, %Y").to_string() } else { tooltip(date, total) });
     }
+    show_all
 }
 
 /// A small box next to the pointer, in the design's own style (hard shadow, 2 px border), above everything else.
@@ -477,16 +560,88 @@ mod tests {
     }
 
     fn paint(days: Option<&[DayTotal]>, has_numbers: bool, width: f32) -> usize {
+        paint_for(days, has_numbers, width, None)
+    }
+
+    fn paint_for(days: Option<&[DayTotal]>, has_numbers: bool, width: f32, agent: Option<AgentFilter>) -> usize {
         let ctx = ctx();
         let t = Tokens::for_theme(Theme::Dark);
         let out = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 ui.set_width(width);
-                show(ui, &Props { tokens: t, days, has_numbers, today: d(2026, 10, 8), week_start: 1 });
+                show(ui, &Props { tokens: t, days, has_numbers, today: d(2026, 10, 8), week_start: 1, agent });
             });
         });
         out.shapes.len()
+    }
+
+    #[test]
+    fn the_scope_switch_is_just_all_until_an_agent_is_picked() {
+        let only_all = switch_layout(20.0, None);
+        assert_eq!(only_all.agent, None);
+        assert_eq!(only_all.all, (BW, 20.0 + 2.0 * SEG_PAD));
+        assert_eq!(only_all.width, 2.0 * BW + 20.0 + 2.0 * SEG_PAD, "border, ALL, border");
+
+        let both = switch_layout(20.0, Some(50.0));
+        let (all_left, all_w) = both.all;
+        let (agent_left, agent_w) = both.agent.expect("the agent has a segment");
+        assert_eq!(all_left, BW, "the border comes first");
+        assert_eq!(agent_left, all_left + all_w + BW, "a divider between the two");
+        assert_eq!(agent_w, DOT + DOT_GAP + 50.0 + 2.0 * SEG_PAD, "dot, gap, name");
+        assert_eq!(both.width, agent_left + agent_w + BW, "and the border closes it");
+        assert_eq!(both.all, only_all.all, "ALL does not move when an agent is picked");
+    }
+
+    #[test]
+    fn it_paints_with_an_agent_picked_with_a_long_name_and_in_a_narrow_window() {
+        let days = vec![DayTotal { date: "2026-10-08".into(), total: 5_000_000 }];
+        let agent = AgentFilter { name: "Antigravity", color: Color32::from_rgb(255, 106, 0) };
+        let all = paint(Some(&days), true, 812.0);
+        let one = paint_for(Some(&days), true, 812.0, Some(agent));
+        assert!(one > all, "the agent's segment adds a divider, a fill, a dot and its name ({one} vs {all})");
+        assert!(paint_for(Some(&days), true, 300.0, Some(agent)) > 30, "a very narrow window still paints");
+        assert!(paint_for(Some(&[]), false, 812.0, Some(agent)) > 300, "an agent without numbers paints the unavailable state");
+        assert!(paint_for(None, true, 812.0, Some(agent)) > 300);
+    }
+
+    /// Runs the heat map for three frames (pointer arrives, button goes down, button comes up) with the pointer at `at`;
+    /// returns whether `show` ever reported ALL as pressed.
+    fn press_at(at: Pos2, agent: Option<AgentFilter>) -> bool {
+        let ctx = ctx();
+        let t = Tokens::for_theme(Theme::Dark);
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let frames = [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)]];
+        let mut pressed_all = false;
+        for events in frames {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0))), events, ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    ui.set_width(812.0);
+                    pressed_all |= show(ui, &Props { tokens: t, days: Some(&[]), has_numbers: true, today: d(2026, 10, 8), week_start: 1, agent });
+                });
+            });
+        }
+        pressed_all
+    }
+
+    #[test]
+    fn pressing_all_reports_it_only_when_an_agent_was_picked() {
+        let heading = Run::new(&ctx(), "ACTIVITY", &h2_style()).width;
+        let all_w = Run::new(&ctx(), "ALL", &switch_style()).width;
+        let (all_left, all_width) = switch_layout(all_w, None).all;
+        let centre = Pos2::new(heading + SWITCH_GAP + all_left + all_width / 2.0, BAR_H / 2.0);
+        let agent = AgentFilter { name: "Claude", color: Color32::from_rgb(255, 106, 0) };
+
+        assert!(press_at(centre, Some(agent)), "ALL goes back to every agent");
+        assert!(!press_at(centre, None), "ALL is already what is shown: nothing to report");
+
+        let name_w = Run::new(&ctx(), "CLAUDE", &switch_style()).width;
+        let (agent_left, agent_width) = switch_layout(all_w, Some(name_w)).agent.unwrap();
+        let on_agent = Pos2::new(heading + SWITCH_GAP + agent_left + agent_width / 2.0, BAR_H / 2.0);
+        assert!(!press_at(on_agent, Some(agent)), "the agent's own segment is not a button");
+        assert!(!press_at(Pos2::new(heading + SWITCH_GAP + 400.0, BAR_H / 2.0), Some(agent)), "nor is the empty part of the bar");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use egui::{vec2, Pos2, Rect, Sense, Ui, Vec2};
 
 use super::fmt;
 use super::hero::is_live;
-use super::paint::{border, dashed_border};
+use super::paint::{border, dashed_border, hard_shadow, over};
 use super::text::{Run, Style, Weight};
 use super::widgets::{agent_dot, btn, h2_style, h3, period_switch, put, tag_at, tag_size, usage_bar_at, Tone, BAR_H};
 use super::wrap::{measure, wrap};
@@ -14,6 +14,9 @@ use crate::motion::format::format_compact;
 use crate::view::{AgentOverview, Availability, Overview, PeriodKey, Settings, Totals};
 
 pub const UNAVAILABLE_TEXT: &str = "TOKEN DATA UNAVAILABLE";
+
+/// How far the hard shadow of the selected agent's row reaches (the rows are 10 px apart).
+const SELECTED_SHADOW: f32 = 3.0;
 
 /// Short, honest label for why an agent has no numbers (`availabilityLabel`).
 pub fn availability_label(a: &Availability) -> &'static str {
@@ -41,6 +44,13 @@ pub fn sort_agents(agents: &[AgentOverview]) -> Vec<&AgentOverview> {
     with.sort_by(|a, b| b.totals.map_or(0, |t| t.total).cmp(&a.totals.map_or(0, |t| t.total)));
     with.extend(agents.iter().filter(|a| a.enabled && a.totals.is_none()));
     with
+}
+
+/// The agent the Statistics page is narrowed to: the one called `id`, if it is listed and still enabled. Anything else
+/// (no pick, an unknown id, an agent turned off in Settings since) is `None`, which the page treats as ALL.
+pub fn picked<'a>(id: Option<&str>, agents: &'a [AgentOverview]) -> Option<&'a AgentOverview> {
+    let id = id?;
+    agents.iter().find(|a| a.id == id && a.enabled)
 }
 
 pub fn max_total(agents: &[&AgentOverview]) -> u64 {
@@ -82,6 +92,8 @@ pub struct Props<'a> {
     pub time_ms: u64,
     /// The overlay shows the headline in its own hero; the Statistics page shows it here.
     pub hide_headline: bool,
+    /// The agent the Statistics page is currently showing on its heat map (its row is drawn raised), if any.
+    pub selected: Option<&'a str>,
 }
 
 /// Paints the section into the current `ui` (full available width) and returns what the user did.
@@ -253,9 +265,18 @@ fn agent_row(ui: &mut Ui, p: &Props, a: &AgentOverview, max: u64) -> Option<Stri
     let top = rect.top() + BW + 7.0;
     let left = rect.left() + BW + 9.0;
 
+    // The whole card is the button. A hover tint says it can be clicked; the row being shown on the heat map is raised
+    // (hard shadow, like a pressed-in `.btn`) and tinted. Drawn first so the text lies on top of the tint.
+    let resp = ui.interact(rect, ui.id().with(("agent-row", a.id.as_str())), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if p.selected == Some(a.id.as_str()) {
+        hard_shadow(ui.painter(), rect, SELECTED_SHADOW, SELECTED_SHADOW, t.ink);
+        ui.painter().rect_filled(rect, 0.0, over(t.bg, t.ink, 0.10));
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 0.0, over(t.bg, t.ink, 0.06));
+    }
+
     // head: dot, name, total / state
     let head = Rect::from_min_size(Pos2::new(left, top), vec2(inner_w, head_h));
-    let head_resp = ui.interact(head, ui.id().with(("agent-head", a.id.as_str())), Sense::click());
     agent_dot(ui, Pos2::new(left, head.center().y - 4.5), color, na, live, p.time_ms, p.settings.animation_intensity);
     let name_style = Style::display(12.0).spacing_em(0.06);
     put(ui, &a.name.to_uppercase(), &name_style, left + 17.0, head.top() + (head_h - name_style.line_h) / 2.0, fg);
@@ -298,7 +319,7 @@ fn agent_row(ui: &mut Ui, p: &Props, a: &AgentOverview, max: u64) -> Option<Stri
     } else {
         border(ui.painter(), rect, BW, t.ink);
     }
-    head_resp.clicked().then(|| a.id.clone())
+    resp.clicked().then(|| a.id.clone())
 }
 
 /// The second line of a row: `IN 1.2M  OUT 2.1M  CACHE 229M  REQ 120  [EST]  ........ 5s ago`, wrapped.
@@ -420,6 +441,18 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_counts_only_while_that_agent_is_listed_and_enabled() {
+        let mut o = mock::overview();
+        assert_eq!(picked(Some("codex"), &o.agents).map(|a| a.id.as_str()), Some("codex"));
+        assert!(picked(None, &o.agents).is_none(), "no pick is ALL");
+        assert!(picked(Some("no-such-agent"), &o.agents).is_none());
+        o.agents.iter_mut().find(|a| a.id == "codex").unwrap().enabled = false;
+        assert!(picked(Some("codex"), &o.agents).is_none(), "turned off in Settings: back to ALL");
+        assert!(picked(Some("claude"), &o.agents).is_some(), "the others are unaffected");
+        assert!(picked(Some("claude"), &[]).is_none(), "nothing is listed yet");
+    }
+
+    #[test]
     fn the_split_box_honours_the_show_settings_and_always_has_requests() {
         let o = mock::overview();
         let t = o.totals.unwrap();
@@ -488,7 +521,7 @@ mod tests {
         for overview in [Some(&o), None] {
             let out = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let acts = show(ui, &Props { tokens: Tokens::for_theme(crate::view::Theme::Dark), overview, settings: &s, now_ms: mock::NOW_MS, time_ms: 0, hide_headline: false });
+                    let acts = show(ui, &Props { tokens: Tokens::for_theme(crate::view::Theme::Dark), overview, settings: &s, now_ms: mock::NOW_MS, time_ms: 0, hide_headline: false, selected: None });
                     assert!(acts.is_empty());
                 });
             });
@@ -498,8 +531,65 @@ mod tests {
         o.count_cached_in_total = false;
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                show(ui, &Props { tokens: Tokens::for_theme(crate::view::Theme::Light), overview: Some(&o), settings: &s, now_ms: mock::NOW_MS, time_ms: 0, hide_headline: false });
+                show(ui, &Props { tokens: Tokens::for_theme(crate::view::Theme::Light), overview: Some(&o), settings: &s, now_ms: mock::NOW_MS, time_ms: 0, hide_headline: false, selected: None });
             });
         });
+    }
+
+    /// Runs one frame of the panel, with the pointer at `pointer` (if any) and a primary click released there.
+    fn frame(ctx: &egui::Context, selected: Option<&str>, events: Vec<egui::Event>, pointer: Option<egui::Pos2>) -> (usize, Vec<Action>) {
+        let (s, o) = (mock::settings(), mock::overview());
+        let mut acts = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(812.0, 1400.0))),
+            events: pointer.map(|p| std::iter::once(egui::Event::PointerMoved(p)).chain(events).collect()).unwrap_or_default(),
+            ..Default::default()
+        };
+        let out = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                acts = show(ui, &Props { tokens: Tokens::for_theme(crate::view::Theme::Dark), overview: Some(&o), settings: &s, now_ms: mock::NOW_MS, time_ms: 0, hide_headline: false, selected });
+            });
+        });
+        (out.shapes.len(), acts)
+    }
+
+    #[test]
+    fn the_selected_agents_row_is_drawn_apart_from_the_others() {
+        let ctx = egui::Context::default();
+        crate::web::install_fonts(&ctx);
+        let (plain, _) = frame(&ctx, None, vec![], None);
+        let (with_one, _) = frame(&ctx, Some("claude"), vec![], None);
+        assert!(with_one > plain, "the raised row adds a shadow and a tint ({with_one} vs {plain})");
+        let (unknown, _) = frame(&ctx, Some("no-such-agent"), vec![], None);
+        assert_eq!(unknown, plain, "selecting nothing that is listed changes nothing");
+    }
+
+    #[test]
+    fn clicking_anywhere_on_an_agents_card_picks_that_agent() {
+        // A click (pointer arrives, button down, button up) at x = 120 and the given y, on a fresh page each time.
+        let click = |y: f32| -> Vec<Action> {
+            let ctx = egui::Context::default();
+            crate::web::install_fonts(&ctx);
+            let at = Pos2::new(120.0, y);
+            let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            let _ = frame(&ctx, None, vec![], Some(at));
+            let _ = frame(&ctx, None, vec![button(true)], Some(at));
+            frame(&ctx, None, vec![button(false)], Some(at)).1
+        };
+        // Sweep the whole page: every click that picks something picks an agent, and every listed agent can be reached.
+        let mut hits: Vec<(f32, String)> = Vec::new();
+        for y in (0..1400).step_by(5) {
+            for a in click(y as f32) {
+                match a {
+                    Action::OpenAgent(id) => hits.push((y as f32, id)),
+                    Action::Period(_) => {} // the DAY / WEEK / MONTH / YEAR switch sits on the same page
+                }
+            }
+        }
+        let ids: std::collections::BTreeSet<&str> = hits.iter().map(|(_, id)| id.as_str()).collect();
+        let listed: std::collections::BTreeSet<String> = sort_agents(&mock::overview().agents).iter().map(|a| a.id.clone()).collect();
+        assert_eq!(ids, listed.iter().map(String::as_str).collect(), "every listed agent, the unavailable one too, can be picked");
+        // The whole card is the button, not only its title line (about 19 px, i.e. 4 probes of 5 px, per card).
+        assert!(hits.len() >= 2 * 4 * listed.len(), "{} probes hit a card; a title-line-only target would give about {}", hits.len(), 4 * listed.len());
     }
 }

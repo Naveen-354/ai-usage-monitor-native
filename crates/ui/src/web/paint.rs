@@ -3,6 +3,13 @@
 
 use egui::{Color32, Painter, Pos2, Rect};
 
+/// `fg` over `bg` at opacity `a`, blended in sRGB the way CSS does and returned opaque. (egui premultiplies translucent
+/// colours in linear light, which would make a 10 % tint come out as roughly 37 % - far brighter than the browser's.)
+pub fn over(bg: Color32, fg: Color32, a: f32) -> Color32 {
+    let ch = |b: u8, f: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * a).round() as u8;
+    Color32::from_rgb(ch(bg.r(), fg.r()), ch(bg.g(), fg.g()), ch(bg.b(), fg.b()))
+}
+
 /// A CSS border drawn *inside* `rect` (`box-sizing: border-box`).
 pub fn border(painter: &Painter, rect: Rect, w: f32, color: Color32) {
     for r in border_bands(rect, w) {

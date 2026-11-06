@@ -186,9 +186,9 @@ impl Backend for CoreBackend {
         Err(not_yet("the history timeline"))
     }
 
-    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
+    fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError> {
         self.with_core(|c| {
-            let days = c.daily_totals(days).map_err(err)?;
+            let days = c.daily_totals(days, agent).map_err(err)?;
             bridge::convert(&days).map_err(BackendError::Message)
         })
     }
@@ -383,7 +383,8 @@ mod tests {
     fn a_fresh_backend_has_no_active_days_and_the_list_converts_to_the_view_type() {
         let dir = tempfile::tempdir().unwrap();
         let b = backend(&dir);
-        assert!(b.daily_totals(371).unwrap().is_empty());
+        assert!(b.daily_totals(371, None).unwrap().is_empty());
+        assert!(b.daily_totals(371, Some("claude")).unwrap().is_empty());
         let core_days = vec![ai_usage_monitor_core::aggregation::DayTotal { date: chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap(), total: 42 }];
         let view: Vec<app_api::view::DayTotal> = bridge::convert(&core_days).unwrap();
         assert_eq!(view, vec![app_api::view::DayTotal { date: "2026-10-08".into(), total: 42 }]);
@@ -399,7 +400,7 @@ mod tests {
         assert!(b.quit_requested());
         b.shutdown();
         assert!(b.settings().is_err());
-        assert!(b.daily_totals(371).is_err());
+        assert!(b.daily_totals(371, None).is_err());
         b.shutdown(); // idempotent
     }
 

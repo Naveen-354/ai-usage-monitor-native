@@ -24,9 +24,12 @@ pub struct DayTotal {
 /// missing from the result had none. Counts what the overview counts: enabled agents only, and cached tokens only when
 /// the "count cached tokens in total" setting is on, so the heat map never disagrees with the numbers beside it.
 ///
+/// `agent` narrows the days to that one agent's usage (`None` = every enabled agent). A disabled or unknown agent has
+/// no days, the same as in the overview.
+///
 /// A 15-minute bucket never straddles local midnight (15 minutes divides every UTC offset), so a bucket belongs to
 /// exactly one local day.
-pub fn daily_totals<Tz: TimeZone>(conn: &Connection, settings: &Settings, tz: &Tz, today: NaiveDate, days: u32) -> Result<Vec<DayTotal>> {
+pub fn daily_totals<Tz: TimeZone>(conn: &Connection, settings: &Settings, tz: &Tz, today: NaiveDate, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>> {
     let days = days.clamp(1, MAX_DAYS);
     let first = today - Duration::days(i64::from(days) - 1);
     let start_s = local_midnight(tz, first).timestamp();
@@ -34,9 +37,10 @@ pub fn daily_totals<Tz: TimeZone>(conn: &Connection, settings: &Settings, tz: &T
 
     let mut st = conn.prepare_cached(
         "SELECT bucket_utc_s, agent_id, SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens)
-         FROM usage_buckets WHERE bucket_utc_s >= ?1 AND bucket_utc_s < ?2 GROUP BY bucket_utc_s, agent_id",
+         FROM usage_buckets WHERE bucket_utc_s >= ?1 AND bucket_utc_s < ?2 AND (?3 IS NULL OR agent_id = ?3)
+         GROUP BY bucket_utc_s, agent_id",
     )?;
-    let rows = st.query_map(params![start_s, end_s], |r| {
+    let rows = st.query_map(params![start_s, end_s, agent], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)?))
     })?;
 
@@ -107,7 +111,7 @@ mod tests {
     #[test]
     fn an_empty_database_has_no_days_with_usage() {
         let (_d, db) = temp_db();
-        let got = db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), 371)).unwrap();
+        let got = db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), 371, None)).unwrap();
         assert!(got.is_empty(), "no usage means no entries, not a list of zeros");
     }
 
@@ -122,7 +126,7 @@ mod tests {
         })
         .unwrap();
         let s = settings(&["codex"], true);
-        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 10)).unwrap();
+        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 10, None)).unwrap();
         assert_eq!(got, vec![DayTotal { date: day(2026, 10, 6), total: 10 }, DayTotal { date: day(2026, 10, 7), total: 110 }]);
     }
 
@@ -140,7 +144,7 @@ mod tests {
         })
         .unwrap();
         let s = settings(&["codex", "claude"], true);
-        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 10)).unwrap();
+        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 10, None)).unwrap();
         assert_eq!(got, vec![DayTotal { date: day(2026, 10, 5), total: 5 }, DayTotal { date: day(2026, 10, 7), total: 300 }]);
     }
 
@@ -153,9 +157,9 @@ mod tests {
             cursors: vec![],
         })
         .unwrap();
-        let with_cache = db.with_reader(|c| daily_totals(c, &settings(&["codex"], true), &ist(), day(2026, 10, 8), 5)).unwrap();
+        let with_cache = db.with_reader(|c| daily_totals(c, &settings(&["codex"], true), &ist(), day(2026, 10, 8), 5, None)).unwrap();
         assert_eq!(with_cache, vec![DayTotal { date: day(2026, 10, 7), total: 160 }], "gemini is not enabled; cached tokens counted");
-        let without = db.with_reader(|c| daily_totals(c, &settings(&["codex"], false), &ist(), day(2026, 10, 8), 5)).unwrap();
+        let without = db.with_reader(|c| daily_totals(c, &settings(&["codex"], false), &ist(), day(2026, 10, 8), 5, None)).unwrap();
         assert_eq!(without, vec![DayTotal { date: day(2026, 10, 7), total: 110 }], "cached tokens left out");
     }
 
@@ -175,15 +179,40 @@ mod tests {
         .unwrap();
         let s = settings(&["codex"], true);
         // 6 days ending Oct 8 = Oct 3 ..= Oct 8
-        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 6)).unwrap();
+        let got = db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 6, None)).unwrap();
         assert_eq!(got, vec![DayTotal { date: day(2026, 10, 3), total: 2 }, DayTotal { date: day(2026, 10, 8), total: 4 }]);
     }
 
     #[test]
     fn a_day_count_of_zero_or_absurd_is_clamped_instead_of_failing() {
         let (_d, db) = temp_db();
-        assert!(db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), 0)).unwrap().is_empty());
-        assert!(db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), u32::MAX)).unwrap().is_empty());
+        assert!(db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), 0, None)).unwrap().is_empty());
+        assert!(db.with_reader(|c| daily_totals(c, &Settings::default(), &ist(), day(2026, 10, 8), u32::MAX, None)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn one_agent_can_be_picked_and_the_others_are_left_out() {
+        let (_d, db) = temp_db();
+        db.commit(&Batch {
+            agent: "codex",
+            events: vec![
+                ev("codex", "a", utc_ms(2026, 10, 7, 6, 0), 100, 0, 0),
+                ev("claude", "b", utc_ms(2026, 10, 7, 7, 0), 200, 0, 0),
+                ev("claude", "c", utc_ms(2026, 10, 5, 7, 0), 7, 0, 0),
+                ev("gemini", "d", utc_ms(2026, 10, 6, 7, 0), 1000, 0, 0),
+            ],
+            cursors: vec![],
+        })
+        .unwrap();
+        let s = settings(&["codex", "claude"], true); // gemini is not enabled
+        let run = |agent: Option<&str>| db.with_reader(|c| daily_totals(c, &s, &ist(), day(2026, 10, 8), 10, agent)).unwrap();
+        assert_eq!(run(None), vec![DayTotal { date: day(2026, 10, 5), total: 7 }, DayTotal { date: day(2026, 10, 7), total: 300 }], "all = every enabled agent");
+        assert_eq!(run(Some("claude")), vec![DayTotal { date: day(2026, 10, 5), total: 7 }, DayTotal { date: day(2026, 10, 7), total: 200 }]);
+        assert_eq!(run(Some("codex")), vec![DayTotal { date: day(2026, 10, 7), total: 100 }]);
+        assert!(run(Some("gemini")).is_empty(), "a disabled agent has no days, as in the overview");
+        assert!(run(Some("no-such-agent")).is_empty());
+        let per_agent: u64 = ["codex", "claude"].iter().flat_map(|a| run(Some(a))).map(|d| d.total).sum();
+        assert_eq!(per_agent, run(None).iter().map(|d| d.total).sum::<u64>(), "the agents add up to ALL");
     }
 
     #[test]

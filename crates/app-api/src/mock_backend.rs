@@ -67,9 +67,9 @@ impl Backend for MockBackend {
         Ok(mock::history(period))
     }
 
-    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
+    fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError> {
         self.check_fail()?;
-        Ok(mock::daily_totals(mock::today(), days))
+        Ok(mock::daily_totals(mock::today(), days, agent))
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {

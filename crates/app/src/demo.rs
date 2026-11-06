@@ -96,8 +96,8 @@ impl Backend for DemoBackend {
         Ok(mock::history(period))
     }
 
-    fn daily_totals(&self, days: u32) -> Result<Vec<DayTotal>, BackendError> {
-        Ok(mock::daily_totals(chrono::Local::now().date_naive(), days))
+    fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError> {
+        Ok(mock::daily_totals(chrono::Local::now().date_naive(), days, agent))
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {
