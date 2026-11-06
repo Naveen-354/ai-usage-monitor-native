@@ -83,6 +83,8 @@ pub fn settings() -> Settings {
         paused: false,
         theme: Theme::Dark,
         animation_intensity: AnimationIntensity::Normal,
+        animation_style: AnimationStyle::Fire,
+        animation_quality: AnimationQuality::Medium,
         show_input: true,
         show_output: true,
         show_cached: true,
@@ -129,6 +131,15 @@ pub fn diagnostics() -> OverlayDiagnostics {
 /// The day the fixture's `NOW_MS` falls on (UTC).
 pub fn today() -> NaiveDate {
     chrono::DateTime::from_timestamp_millis(NOW_MS).expect("NOW_MS is a valid time").date_naive()
+}
+
+/// The fixture's usage window as of `now_ms`: Claude Code opened one 2 h 13 min ago (inside today's fixture total); every
+/// other agent has none. The same shape the real backend returns, so previews show what the real screen would.
+pub fn usage_window(now_ms: i64, agent: &str) -> Option<UsageWindow> {
+    (agent == "claude").then(|| {
+        let start = now_ms - (2 * HOUR + 13 * 60_000);
+        UsageWindow { start_utc_ms: start, resets_utc_ms: start + 5 * HOUR, tokens: 118_400_000, events: 62 }
+    })
 }
 
 fn splitmix64(mut x: u64) -> u64 {
@@ -304,6 +315,18 @@ mod tests {
         let no_numbers = overview().agents.into_iter().find(|a| a.totals.is_none()).expect("the fixture has an agent without numbers");
         assert!(daily_totals(today, 371, Some(&no_numbers.id)).is_empty());
         assert!(daily_totals(today, 371, Some("no-such-agent")).is_empty());
+    }
+
+    #[test]
+    fn the_fixture_window_is_claudes_alone_five_hours_long_and_inside_its_total() {
+        let w = usage_window(NOW_MS, "claude").expect("claude has a window in the fixture");
+        assert_eq!(w.resets_utc_ms - w.start_utc_ms, 5 * HOUR);
+        assert!(w.start_utc_ms < NOW_MS && NOW_MS < w.resets_utc_ms, "the window is open");
+        let claude_total = overview().agents.iter().find(|a| a.id == "claude").and_then(|a| a.totals).unwrap().total;
+        assert!(w.tokens <= claude_total, "a window cannot hold more than the agent used today");
+        assert!(usage_window(NOW_MS, "codex").is_none() && usage_window(NOW_MS, "no-such-agent").is_none());
+        let j = serde_json::to_string(&w).unwrap();
+        assert!(j.contains("\"startUtcMs\"") && j.contains("\"resetsUtcMs\""));
     }
 
     #[test]

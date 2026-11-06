@@ -184,6 +184,17 @@ pub fn weekday_labels(week_start: u8) -> [(usize, &'static str); 3] {
 pub struct AgentFilter<'a> {
     pub name: &'a str,
     pub color: Color32,
+    /// Does this agent have a command-line tool? Then an OPEN CMD button is drawn beside the switch.
+    pub can_open: bool,
+}
+
+/// What the user did in the header this frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Pressed ALL: go back from one agent to every agent.
+    ShowAll,
+    /// Pressed OPEN CMD: open a command prompt running the picked agent's tool.
+    OpenTerminal,
 }
 
 pub struct Props<'a> {
@@ -278,9 +289,39 @@ fn scope_switch(ui: &mut Ui, t: &Tokens, agent: Option<AgentFilter>, at: Pos2) -
     (resp.clicked() && agent.is_some(), rect.right())
 }
 
-/// Paints the section (heading, scope switch, box of squares, legend) at the full available width. Returns true when
-/// the user pressed ALL to go back from one agent to every agent.
-pub fn show(ui: &mut Ui, p: &Props) -> bool {
+/// Gap between the scope switch and the OPEN CMD button.
+const OPEN_GAP: f32 = 10.0;
+const OPEN_LABEL: &str = "OPEN CMD";
+
+/// Width of the OPEN CMD button for a label `text_w` wide (border, padding, label, padding, border).
+pub fn open_button_width(text_w: f32) -> f32 {
+    text_w + 2.0 * SEG_PAD + 2.0 * BW
+}
+
+/// `[ OPEN CMD ]`: a bordered button that fills in on hover and while pressed. Painted with its top-left at `at`;
+/// returns (pressed, right edge). A tooltip names what it will start.
+fn open_button(ui: &mut Ui, t: &Tokens, name: &str, at: Pos2) -> (bool, f32) {
+    let st = switch_style();
+    let run = Run::new(ui.ctx(), OPEN_LABEL, &st);
+    let rect = Rect::from_min_size(at, vec2(open_button_width(run.width), BAR_H));
+    let resp = ui.interact(rect, ui.id().with("activity-open-cmd"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let down = resp.is_pointer_button_down_on();
+    if down {
+        ui.painter().rect_filled(rect, 0.0, t.ink);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 0.0, over(t.bg, t.ink, 0.18));
+    }
+    run.paint(ui.painter(), rect.left() + BW + SEG_PAD, rect.top() + (rect.height() - st.line_h) / 2.0, if down { t.bg } else { t.ink });
+    border(ui.painter(), rect, BW, t.ink);
+    if let (true, Some(pointer)) = (resp.hovered(), resp.hover_pos()) {
+        draw_tooltip(ui, t, pointer, &format!("Open {name} in a command prompt"));
+    }
+    (resp.clicked(), rect.right())
+}
+
+/// Paints the section (heading, scope switch, OPEN CMD, box of squares, legend) at the full available width. Returns
+/// what the user pressed in the header, if anything.
+pub fn show(ui: &mut Ui, p: &Props) -> Option<Action> {
     let t = p.tokens;
     let width = ui.available_width();
     let weeks = weeks_that_fit(width);
@@ -303,7 +344,15 @@ pub fn show(ui: &mut Ui, p: &Props) -> bool {
     let (bar, _) = ui.allocate_exact_size(vec2(width, BAR_H), Sense::hover());
     let h2 = h2_style();
     let title_w = put(ui, "ACTIVITY", &h2, bar.left(), bar.top() + (BAR_H - h2.line_h) / 2.0, t.ink);
-    let (show_all, controls_right) = scope_switch(ui, &t, p.agent, Pos2::new(bar.left() + title_w + SWITCH_GAP, bar.top()));
+    let (show_all, mut controls_right) = scope_switch(ui, &t, p.agent, Pos2::new(bar.left() + title_w + SWITCH_GAP, bar.top()));
+    let mut action = show_all.then_some(Action::ShowAll);
+    if let Some(agent) = p.agent.filter(|a| a.can_open) {
+        let (pressed, right) = open_button(ui, &t, agent.name, Pos2::new(controls_right + OPEN_GAP, bar.top()));
+        controls_right = right;
+        if pressed {
+            action = Some(Action::OpenTerminal);
+        }
+    }
     let (text, weight, color) = if unavailable {
         (super::all_agents::UNAVAILABLE_TEXT.to_string(), Weight::W700, t.alert)
     } else {
@@ -367,7 +416,7 @@ pub fn show(ui: &mut Ui, p: &Props) -> bool {
         let total = by_date.get(&date).copied().unwrap_or(0);
         draw_tooltip(ui, &t, pointer, &if unavailable { date.format("%a, %b %-d, %Y").to_string() } else { tooltip(date, total) });
     }
-    show_all
+    action
 }
 
 /// A small box next to the pointer, in the design's own style (hard shadow, 2 px border), above everything else.
@@ -596,34 +645,37 @@ mod tests {
     #[test]
     fn it_paints_with_an_agent_picked_with_a_long_name_and_in_a_narrow_window() {
         let days = vec![DayTotal { date: "2026-10-08".into(), total: 5_000_000 }];
-        let agent = AgentFilter { name: "Antigravity", color: Color32::from_rgb(255, 106, 0) };
+        let agent = AgentFilter { name: "Antigravity", color: Color32::from_rgb(255, 106, 0), can_open: false };
         let all = paint(Some(&days), true, 812.0);
         let one = paint_for(Some(&days), true, 812.0, Some(agent));
         assert!(one > all, "the agent's segment adds a divider, a fill, a dot and its name ({one} vs {all})");
+        let with_cmd = paint_for(Some(&days), true, 812.0, Some(AgentFilter { can_open: true, ..agent }));
+        assert!(with_cmd > one, "an agent with a command-line tool also gets the OPEN CMD button ({with_cmd} vs {one})");
+        assert!(paint_for(Some(&days), true, 300.0, Some(AgentFilter { can_open: true, ..agent })) > 30, "and a narrow window still paints with it");
         assert!(paint_for(Some(&days), true, 300.0, Some(agent)) > 30, "a very narrow window still paints");
         assert!(paint_for(Some(&[]), false, 812.0, Some(agent)) > 300, "an agent without numbers paints the unavailable state");
         assert!(paint_for(None, true, 812.0, Some(agent)) > 300);
     }
 
     /// Runs the heat map for three frames (pointer arrives, button goes down, button comes up) with the pointer at `at`;
-    /// returns whether `show` ever reported ALL as pressed.
-    fn press_at(at: Pos2, agent: Option<AgentFilter>) -> bool {
+    /// returns everything `show` reported along the way.
+    fn press_at(at: Pos2, agent: Option<AgentFilter>) -> Vec<Action> {
         let ctx = ctx();
         let t = Tokens::for_theme(Theme::Dark);
         let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         let frames = [vec![egui::Event::PointerMoved(at)], vec![button(true)], vec![button(false)]];
-        let mut pressed_all = false;
+        let mut actions = Vec::new();
         for events in frames {
             let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0))), events, ..Default::default() };
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                     ui.set_width(812.0);
-                    pressed_all |= show(ui, &Props { tokens: t, days: Some(&[]), has_numbers: true, today: d(2026, 10, 8), week_start: 1, agent });
+                    actions.extend(show(ui, &Props { tokens: t, days: Some(&[]), has_numbers: true, today: d(2026, 10, 8), week_start: 1, agent }));
                 });
             });
         }
-        pressed_all
+        actions
     }
 
     #[test]
@@ -632,16 +684,42 @@ mod tests {
         let all_w = Run::new(&ctx(), "ALL", &switch_style()).width;
         let (all_left, all_width) = switch_layout(all_w, None).all;
         let centre = Pos2::new(heading + SWITCH_GAP + all_left + all_width / 2.0, BAR_H / 2.0);
-        let agent = AgentFilter { name: "Claude", color: Color32::from_rgb(255, 106, 0) };
+        let agent = AgentFilter { name: "Claude", color: Color32::from_rgb(255, 106, 0), can_open: false };
 
-        assert!(press_at(centre, Some(agent)), "ALL goes back to every agent");
-        assert!(!press_at(centre, None), "ALL is already what is shown: nothing to report");
+        assert_eq!(press_at(centre, Some(agent)), [Action::ShowAll], "ALL goes back to every agent");
+        assert!(press_at(centre, None).is_empty(), "ALL is already what is shown: nothing to report");
 
         let name_w = Run::new(&ctx(), "CLAUDE", &switch_style()).width;
         let (agent_left, agent_width) = switch_layout(all_w, Some(name_w)).agent.unwrap();
         let on_agent = Pos2::new(heading + SWITCH_GAP + agent_left + agent_width / 2.0, BAR_H / 2.0);
-        assert!(!press_at(on_agent, Some(agent)), "the agent's own segment is not a button");
-        assert!(!press_at(Pos2::new(heading + SWITCH_GAP + 400.0, BAR_H / 2.0), Some(agent)), "nor is the empty part of the bar");
+        assert!(press_at(on_agent, Some(agent)).is_empty(), "the agent's own segment is not a button");
+        assert!(press_at(Pos2::new(heading + SWITCH_GAP + 400.0, BAR_H / 2.0), Some(agent)).is_empty(), "nor is the empty part of the bar");
+    }
+
+    #[test]
+    fn open_cmd_is_a_button_only_for_an_agent_that_has_a_command_line_tool() {
+        let heading = Run::new(&ctx(), "ACTIVITY", &h2_style()).width;
+        let all_w = Run::new(&ctx(), "ALL", &switch_style()).width;
+        let name_w = Run::new(&ctx(), "CLAUDE", &switch_style()).width;
+        let label_w = Run::new(&ctx(), OPEN_LABEL, &switch_style()).width;
+        let switch_right = heading + SWITCH_GAP + switch_layout(all_w, Some(name_w)).width;
+        let button_left = switch_right + OPEN_GAP;
+        let centre = Pos2::new(button_left + open_button_width(label_w) / 2.0, BAR_H / 2.0);
+        let claude = AgentFilter { name: "Claude", color: Color32::from_rgb(255, 106, 0), can_open: true };
+
+        assert_eq!(press_at(centre, Some(claude)), [Action::OpenTerminal], "pressing the button asks to open the agent's tool");
+        assert!(press_at(centre, Some(AgentFilter { can_open: false, ..claude })).is_empty(), "no tool, no button: the same spot is empty bar");
+        assert!(press_at(centre, None).is_empty(), "with every agent shown there is nothing to open");
+        // (egui counts a pointer within a few px of a widget as on it, so test clear of the button, not at its very edge)
+        let past_it = Pos2::new(button_left + open_button_width(label_w) + 20.0, BAR_H / 2.0);
+        assert!(press_at(past_it, Some(claude)).is_empty(), "the bar to the right of the button is not a button");
+        assert_eq!(press_at(Pos2::new(heading + SWITCH_GAP + 20.0, BAR_H / 2.0), Some(claude)), [Action::ShowAll], "ALL still works beside it");
+    }
+
+    #[test]
+    fn the_open_button_is_as_wide_as_its_label_and_padding() {
+        assert_eq!(open_button_width(40.0), 40.0 + 2.0 * SEG_PAD + 2.0 * BW);
+        assert!(open_button_width(0.0) > 0.0);
     }
 
     #[test]

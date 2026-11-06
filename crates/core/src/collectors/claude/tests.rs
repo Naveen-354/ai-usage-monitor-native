@@ -425,3 +425,57 @@ fn real_data_matches_an_independent_count() {
     }
     assert!(count < raw_records, "de-duplication must reduce the record count");
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Real-data check of the 5-hour window estimate (opt-in): `cargo test claude::tests::real_data_window -- --ignored --nocapture`
+// When a request is rejected Claude Code logs `rate_limit_info {rateLimitType: "five_hour", resetsAt: <unix s>}`. That is the
+// provider's own reset time, so for every such record the window the model says was open must close close to it. Only those
+// two numbers (and the record's timestamp) are read, and only by this test.
+// ---------------------------------------------------------------------------------------------------
+#[test]
+#[ignore = "reads the real ~/.claude directory"]
+fn real_data_window_estimate_agrees_with_the_providers_own_reset_time() {
+    let env = Env::from_system();
+    let root = projects_dir(&env);
+    if !root.is_dir() {
+        eprintln!("no ~/.claude/projects here; nothing to verify");
+        return;
+    }
+
+    // (time of the rejection in ms, the provider's reset time in unix seconds), once per distinct reset time
+    let mut rejections: HashMap<i64, i64> = HashMap::new();
+    for (path, _) in walk::files_with_suffix(&root, ".jsonl", MAX_DEPTH) {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        for line in text.lines().filter(|l| l.contains("\"five_hour\"")) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let info = &v["apiErrorParams"]["rate_limit_info"];
+            let (Some(resets), Some(ts)) = (info["resetsAt"].as_i64(), v["timestamp"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok())) else { continue };
+            if info["rateLimitType"] == "five_hour" {
+                rejections.entry(resets).or_insert(ts.timestamp_millis());
+            }
+        }
+    }
+    if rejections.is_empty() {
+        eprintln!("no five_hour rejection has been logged on this machine; nothing to compare with");
+        return;
+    }
+
+    let (_d, db) = temp_db();
+    let det = ClaudeCollector.detect(&env);
+    let fx = Fixture::new(&env.home);
+    let projects = ProjectResolver::new(true, env.home.clone());
+    let cursors = HashMap::new();
+    let ctx = CollectCtx { env: &env, detection: &det, cursors: &cursors, projects: &projects, cancel: &fx.cancel };
+    let mut sink = DbSink { db: db.clone(), agent: ID };
+    ClaudeCollector.collect_usage(&ctx, &mut sink).unwrap();
+
+    for (resets_s, at_ms) in rejections {
+        let w = db
+            .with_reader(|c| crate::aggregation::current_window(c, &crate::settings::Settings::default(), "claude", at_ms))
+            .unwrap()
+            .unwrap_or_else(|| panic!("the model has no window open at {at_ms}, when the provider rejected a request"));
+        let off_min = (w.resets_utc_ms - resets_s * 1000) as f64 / 60_000.0;
+        eprintln!("rejected at {at_ms}: provider resets at {resets_s}, the model says {} ({off_min:+.1} min); {} tokens, {} requests in the window", w.resets_utc_ms / 1000, w.tokens, w.events);
+        assert!(off_min.abs() <= 15.0, "the model's reset time is {off_min:+.1} min from the provider's own");
+    }
+}

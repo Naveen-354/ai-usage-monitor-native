@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use crate::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use crate::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use crate::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
 use crate::mock;
 
 pub struct MockBackend {
@@ -72,6 +72,11 @@ impl Backend for MockBackend {
         Ok(mock::daily_totals(mock::today(), days, agent))
     }
 
+    fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>, BackendError> {
+        self.check_fail()?;
+        Ok(mock::usage_window(mock::NOW_MS, agent))
+    }
+
     fn settings(&self) -> Result<Settings, BackendError> {
         self.check_fail()?;
         Ok(self.settings.lock().unwrap().clone())
@@ -98,6 +103,8 @@ impl Backend for MockBackend {
         if let Some(v) = patch.paused { s.paused = v; }
         if let Some(v) = patch.theme { s.theme = v; }
         if let Some(v) = patch.animation_intensity { s.animation_intensity = v; }
+        if let Some(v) = patch.animation_style { s.animation_style = v; }
+        if let Some(v) = patch.animation_quality { s.animation_quality = v; }
         if let Some(v) = patch.show_input { s.show_input = v; }
         if let Some(v) = patch.show_output { s.show_output = v; }
         if let Some(v) = patch.show_cached { s.show_cached = v; }

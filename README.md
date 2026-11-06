@@ -19,6 +19,25 @@ there is no telemetry: [PRIVACY.md](PRIVACY.md) says exactly what is read, [docs
 
 CPU while the flame animates live was ~3.5 % (spike) to ~11 % (debug builds) and depends on activity. Not measured over hours (no leak test).
 
+## Animations
+
+Settings -> Display -> **Animation style** swaps the flame for one of seven pixel-art scenes (hamster wheel, rubber duck, slot machine,
+piggy bank, typing cat, token muncher, token spitter); the Settings page shows a live preview of the one you pick. **Animation quality** sets how
+sharp and smooth the scenes are. Every scene has the flame's three states: *live* (an agent is working: it moves), *idle* (a still pose,
+no timer), *off* (paused or no data: a still, greyed pose); and a token **surge** makes a bigger moment (a jump in tokens, scaled by size).
+
+| quality | canvas | frame rate | memory held | draw time per frame (release, one core) |
+|---|---|---|---|---|
+| Low | 80 x 60 | 8 fps | 23 KB | 13-35 us |
+| Medium | 160 x 120 | 12 fps | 94 KB | 160-230 us |
+| High | 240 x 180 | 20 fps | 211 KB | 370-500 us (about 1 % of a core at most) |
+
+The canvas is one byte per pixel (an index into one shared 35-colour palette); the memory column is that plus the RGBA buffer the
+texture upload needs. A test (`crates/fire-engine/tests/test_alloc.rs`) fails if a scene allocates while running, and switching style or
+quality drops the old animation and its buffers. The classic flame ignores the quality setting. Measure on your own machine with
+`cargo run --release -p fire-engine --example bench`; look at one scene with
+`cargo run -p fire-engine --example sheet -- hamster high out.ppm`.
+
 ## Build and install (Windows 10/11)
 
 There is no installer yet; the release build is a single self-contained `.exe` (fonts and SQLite are compiled in; no WebView2, Node or
@@ -98,7 +117,7 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 ## Verified (by running it, not by reading it)
 
-* `cargo test --workspace`: 452 tests, 0 failures, 4 ignored (core; need real agent data) - run with the app closed;
+* `cargo test --workspace`: 524 tests, 0 failures, 6 ignored (core; need real agent data) - run with the app closed;
   `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 * Real data end to end: the overlay, expanded view, Settings, Diagnostics and Privacy pages show the real counts; per-collector
   numbers match independent checks made against the agents' own files (e.g. Gemini 1,812 events).
@@ -117,6 +136,14 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 * **RELOAD AGENTS** on the Diagnostics page (not in the original design): looks for every supported agent on this computer again. A running
   program keeps the `PATH` it started with, so a CLI installed since then is invisible to it; the button re-reads the machine's and the
   user's `PATH` from the registry first, then wakes every collector to detect and collect now.
+* The expanded overlay has a **5-HOUR WINDOW** box for Claude Code: the time left (`RESETS IN 2H 47M`), a bar of the time elapsed with a
+  tick per hour, the tokens and requests inside the window, and when it opened and closes (local time). It is an **estimate**, and the box
+  says so: Claude Code does not store how much of the limit is used (it logs a `five_hour` record only when a request is *rejected*), and the
+  limit is not a token count. What the local data supports is the window's shape: it opens with the first request after the previous window
+  ended and closes 5 hours later (`core/aggregation/window.rs`). Checked against the provider's own number: on the one rejection logged on
+  the development machine the model's reset time was 4.8 minutes after the provider's `resetsAt`
+  (`cargo test -p ai_usage_monitor_core real_data_window -- --ignored --nocapture`). Between windows it says NO WINDOW OPEN, and when the
+  window cannot be read it says UNAVAILABLE, never "no window". Both themes were checked on the demo (`--demo`).
 * Expanding and collapsing keeps the overlay on screen: it grows and shrinks around the screen corner it is nearest to (a bottom-right
   overlay opens up and to the left) and is clamped into the work area of *its own* monitor. Measured on a real window in all four
   corners, and when the app restarts while expanded; each collapses back to exactly where it started.
@@ -128,6 +155,11 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 
 * **Timeline charts:** the Statistics page is the activity heat map plus the per-agent breakdown. The core has no timeline/by-model/by-project
   query, and the first-generation `statistics` module (charts) is not shown anywhere. Also not implemented: JSON/CSV export, clear history, custom data location.
+* **5-hour window:** Claude Code only, and only this computer's usage: claude.ai and other devices count toward the same limit but are
+  invisible here, and the real "percent used" is not on disk, so there is no percentage. It is shown in the expanded overlay only (not the
+  compact one or the Statistics page). Not done for the other agents: Antigravity has a quota with a remaining fraction and a reset time, but
+  it is fetched from Google's servers while the CLI runs and is not stored in the files this app reads; Codex logs a real `rate_limits`
+  percentage in its rollouts (the collector ignores it today), but there is no Codex data on the development machine to build or check that against.
 * **Light theme:** built from the same tokens, but only the dark theme was compared against the browser rendering.
 * The tray menu was exercised through its event path, not by right-clicking it; the global hotkeys' key mapping is tested but no key was pressed;
   start-with-system is wired but was never toggled on a real machine (it writes a start-up entry), and the Settings page has no row for it

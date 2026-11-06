@@ -8,12 +8,12 @@ use super::fmt;
 use super::paint::border;
 use super::text::{Run, Style, Weight};
 use super::widgets::{
-    body, body_bold, btn, chip_flow, chipbox, chipbox_size, fineprint, fineprint_limited, h2, h3, hint, number_row, put, section, select_row, slider_row, tag_at, Slider, tag_size, toggle_row, Tone,
+    body, body_bold, btn, chip_flow, chipbox, chipbox_size, field_box, fineprint, fineprint_limited, frow, h2, h3, hint, number_row, put, section, select_row, slider_row, tag_at, Slider, tag_size, toggle_row, Tone,
 };
 use super::wrap::{measure, wrap};
 use super::{agent_color, Tokens, BW};
 use crate::expanded::Page;
-use crate::view::{AgentOverview, AnimationIntensity, AppInfo, Availability, Corner, OverlayDiagnostics, Settings, Theme};
+use crate::view::{AgentOverview, AnimationIntensity, AnimationQuality, AnimationStyle, AppInfo, Availability, Corner, OverlayDiagnostics, Settings, Theme};
 
 // ------------------------------------------------------------------------------------------------ header and tabs
 
@@ -84,6 +84,32 @@ pub fn page<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const CORNERS: [(Corner, &str); 5] = [(Corner::TopRight, "Top right"), (Corner::TopLeft, "Top left"), (Corner::BottomRight, "Bottom right"), (Corner::BottomLeft, "Bottom left"), (Corner::Custom, "Custom (dragged)")];
 
+/// The animations on offer, in the order of the drop-down.
+pub const STYLES: [(AnimationStyle, &str); 8] = [
+    (AnimationStyle::Fire, "Fire (classic)"),
+    (AnimationStyle::Hamster, "Hamster wheel"),
+    (AnimationStyle::Duck, "Rubber duck"),
+    (AnimationStyle::Slots, "Slot machine"),
+    (AnimationStyle::Pig, "Piggy bank"),
+    (AnimationStyle::Cat, "Typing cat"),
+    (AnimationStyle::Muncher, "Token muncher"),
+    (AnimationStyle::Spitter, "Token spitter"),
+];
+pub const QUALITIES: [(AnimationQuality, &str); 3] = [(AnimationQuality::Low, "Low (lightest)"), (AnimationQuality::Medium, "Medium"), (AnimationQuality::High, "High (sharpest)")];
+/// What each quality costs, said under the picker. The canvas is one byte per pixel, so even High stays far under a megabyte.
+pub const QUALITY_HINT: &str = "Low 80x60 at 8 fps, Medium 160x120 at 12 fps, High 240x180 at 20 fps. All under 0.25 MB; Fire keeps its classic look.";
+
+/// `Preview`: the chosen animation, live (a surge every few seconds). The picture is the app's own texture.
+fn preview_row(ui: &mut Ui, t: &Tokens, texture: Option<egui::TextureId>) {
+    frow(ui, t, "Preview", Some("Live, with a surge every few seconds."), false, vec2(160.0 + 2.0 * BW, 120.0 + 2.0 * BW), |ui, r| {
+        field_box(ui, t, r);
+        if let Some(tex) = texture {
+            let inner = r.shrink(BW);
+            ui.painter().image(tex, inner, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+    });
+}
+
 #[derive(Debug, Default)]
 pub struct SettingsOut {
     /// The settings after the user's edit, when something changed.
@@ -91,7 +117,8 @@ pub struct SettingsOut {
     pub quit: bool,
 }
 
-pub fn settings_page(ui: &mut Ui, t: &Tokens, s: &Settings, agents: &[AgentOverview]) -> SettingsOut {
+/// `preview` is the texture of the live animation preview (`None` while it has none yet).
+pub fn settings_page(ui: &mut Ui, t: &Tokens, s: &Settings, agents: &[AgentOverview], preview: Option<egui::TextureId>) -> SettingsOut {
     let mut n = s.clone();
     let mut dirty = false;
     let mut quit = false;
@@ -141,6 +168,19 @@ pub fn settings_page(ui: &mut Ui, t: &Tokens, s: &Settings, agents: &[AgentOverv
                 n.animation_intensity = intensities[i];
                 dirty = true;
             }
+            let labels: Vec<&str> = STYLES.iter().map(|a| a.1).collect();
+            let cur = STYLES.iter().position(|a| a.0 == s.animation_style).unwrap_or(0);
+            if let Some(i) = select_row(ui, t, "Animation style", Some("What the overlay animates while an agent is working."), false, &labels, cur) {
+                n.animation_style = STYLES[i].0;
+                dirty = true;
+            }
+            let labels: Vec<&str> = QUALITIES.iter().map(|q| q.1).collect();
+            let cur = QUALITIES.iter().position(|q| q.0 == s.animation_quality).unwrap_or(1);
+            if let Some(i) = select_row(ui, t, "Animation quality", Some(QUALITY_HINT), false, &labels, cur) {
+                n.animation_quality = QUALITIES[i].0;
+                dirty = true;
+            }
+            preview_row(ui, t, preview);
             set!(toggle_row(ui, t, "Show input tokens", None, false, s.show_input), show_input);
             set!(toggle_row(ui, t, "Show output tokens", None, false, s.show_output), show_output);
             set!(toggle_row(ui, t, "Show cached tokens", None, false, s.show_cached), show_cached);
@@ -657,7 +697,7 @@ mod tests {
                     assert!(tab.is_none());
                     match page_kind {
                         0 => {
-                            let o = settings_page(ui, &t, &s, &o.agents);
+                            let o = settings_page(ui, &t, &s, &o.agents, None);
                             assert!(o.changed.is_none() && !o.quit, "nothing changes in a headless frame");
                         }
                         1 => {
@@ -718,7 +758,7 @@ mod tests {
         // The old page had exactly these rows; the native one must not grow extras (shortcuts, start-with-system, ...).
         let src = include_str!("pages.rs");
         for label in [
-            "Always on top", "Compact mode", "Overlay position", "Overlay background", "Token text size", "Show overlay in taskbar", "Pause monitoring", "Polling interval", "Project detection", "Enabled agents", "Theme", "Animation intensity", "Show input tokens", "Show output tokens", "Show cached tokens", "Count cached tokens in totals", "Week starts on", "Retention period", "QUIT APPLICATION",
+            "Always on top", "Compact mode", "Overlay position", "Overlay background", "Token text size", "Show overlay in taskbar", "Pause monitoring", "Polling interval", "Project detection", "Enabled agents", "Theme", "Animation intensity", "Animation style", "Animation quality", "Preview", "Show input tokens", "Show output tokens", "Show cached tokens", "Count cached tokens in totals", "Week starts on", "Retention period", "QUIT APPLICATION",
         ] {
             assert!(src.contains(&format!("\"{label}\"")), "missing the old row '{label}'");
         }

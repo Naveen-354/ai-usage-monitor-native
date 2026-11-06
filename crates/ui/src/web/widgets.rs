@@ -325,8 +325,8 @@ pub fn select_row(ui: &mut Ui, t: &Tokens, label: &str, hint_text: Option<&str>,
         // the drop-down arrow
         let c = Pos2::new(r.right() - 12.0, r.center().y);
         let pts = [c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
-        ui.painter().line_segment([pts[0], pts[1]], egui::Stroke::new(1.6, t.ink));
-        ui.painter().line_segment([pts[1], pts[2]], egui::Stroke::new(1.6, t.ink));
+        ui.painter().line_segment([pts[0], pts[1]], egui::Stroke::new(1.6_f32, t.ink));
+        ui.painter().line_segment([pts[1], pts[2]], egui::Stroke::new(1.6_f32, t.ink));
         let popup = id.with("popup");
         if resp.clicked() {
             ui.memory_mut(|m| m.toggle_popup(popup));

@@ -5,10 +5,12 @@ mod app;
 mod backend;
 mod bridge;
 mod demo;
+mod anim_host;
 mod flame;
 mod layout;
 mod placement;
 mod shell;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};

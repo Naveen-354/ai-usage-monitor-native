@@ -1,7 +1,7 @@
 //! Pure decisions about the flame, kept out of the egui code so they are unit-tested.
 //! The flame must never suggest activity that is not there.
 
-use app_api::view::{AnimationIntensity, Overview};
+use app_api::view::{AnimationIntensity, AnimationQuality, AnimationStyle, Overview};
 use fire_engine::engine::FlameState;
 
 pub fn flame_state(overview: Option<&Overview>, now_ms: i64) -> FlameState {
@@ -25,6 +25,29 @@ pub fn motion_factor(i: AnimationIntensity) -> f64 {
         AnimationIntensity::Off => 0.0,
         AnimationIntensity::Low => 0.5,
         AnimationIntensity::Normal => 1.0,
+    }
+}
+
+/// The setting's animation -> the engine's.
+pub fn engine_style(s: AnimationStyle) -> fire_engine::Style {
+    use fire_engine::Style as E;
+    match s {
+        AnimationStyle::Fire => E::Fire,
+        AnimationStyle::Hamster => E::Hamster,
+        AnimationStyle::Duck => E::Duck,
+        AnimationStyle::Slots => E::Slots,
+        AnimationStyle::Pig => E::Pig,
+        AnimationStyle::Cat => E::Cat,
+        AnimationStyle::Muncher => E::Muncher,
+        AnimationStyle::Spitter => E::Spitter,
+    }
+}
+
+pub fn engine_quality(q: AnimationQuality) -> fire_engine::Quality {
+    match q {
+        AnimationQuality::Low => fire_engine::Quality::Low,
+        AnimationQuality::Medium => fire_engine::Quality::Medium,
+        AnimationQuality::High => fire_engine::Quality::High,
     }
 }
 
@@ -115,6 +138,16 @@ mod tests {
         assert_eq!(motion_factor(AnimationIntensity::Off), 0.0);
         assert_eq!(motion_factor(AnimationIntensity::Low), 0.5);
         assert_eq!(motion_factor(AnimationIntensity::Normal), 1.0);
+    }
+
+    #[test]
+    fn every_setting_value_maps_to_its_own_engine_value() {
+        let styles = [AnimationStyle::Fire, AnimationStyle::Hamster, AnimationStyle::Duck, AnimationStyle::Slots, AnimationStyle::Pig, AnimationStyle::Cat, AnimationStyle::Muncher, AnimationStyle::Spitter];
+        let mapped: Vec<_> = styles.iter().map(|s| engine_style(*s)).collect();
+        assert_eq!(mapped, fire_engine::Style::ALL, "same order, one engine style per setting value");
+        assert_eq!(engine_quality(AnimationQuality::Low), fire_engine::Quality::Low);
+        assert_eq!(engine_quality(AnimationQuality::Medium), fire_engine::Quality::Medium);
+        assert_eq!(engine_quality(AnimationQuality::High), fire_engine::Quality::High);
     }
 
     #[test]

@@ -37,7 +37,7 @@ fn test_golden() {
         fs::write(golden_path, &ascii).unwrap();
     } else {
         if Path::new(golden_path).exists() {
-            let golden = fs::read_to_string(golden_path).unwrap();
+            let golden = fs::read_to_string(golden_path).unwrap().replace("\r\n", "\n");
             assert_eq!(ascii, golden, "Golden test mismatch");
         } else {
             println!("Golden file missing, run with 'regenerate_golden' to create");

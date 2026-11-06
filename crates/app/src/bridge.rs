@@ -43,6 +43,8 @@ pub fn patch_to_json(p: &SettingsPatch) -> Value {
     put!(paused, "paused");
     put!(theme, "theme");
     put!(animation_intensity, "animationIntensity");
+    put!(animation_style, "animationStyle");
+    put!(animation_quality, "animationQuality");
     put!(show_input, "showInput");
     put!(show_output, "showOutput");
     put!(show_cached, "showCached");
@@ -132,6 +134,8 @@ mod tests {
             paused: Some(true),
             theme: Some(Theme::Light),
             animation_intensity: Some(view::AnimationIntensity::Low),
+            animation_style: Some(view::AnimationStyle::Muncher),
+            animation_quality: Some(view::AnimationQuality::High),
             show_input: Some(false),
             show_output: Some(false),
             show_cached: Some(false),
@@ -146,7 +150,7 @@ mod tests {
         };
         let json = patch_to_json(&all);
         let n_keys = json.as_object().unwrap().len();
-        assert_eq!(n_keys, 28);
+        assert_eq!(n_keys, 30);
         let applied: CoreSettings = serde_json::from_value(json.clone()).unwrap();
         let echoed = serde_json::to_value(&applied).unwrap();
         for (k, v) in json.as_object().unwrap() {

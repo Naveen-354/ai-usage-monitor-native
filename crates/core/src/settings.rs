@@ -39,6 +39,29 @@ pub enum AnimationIntensity {
     Normal,
 }
 
+/// What the overlay animates while agents work. `Fire` is the original flame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationStyle {
+    Fire,
+    Hamster,
+    Duck,
+    Slots,
+    Pig,
+    Cat,
+    Muncher,
+    Spitter,
+}
+
+/// How sharp and smooth the animated scenes are (canvas size and frame rate). Memory stays tiny at every level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationQuality {
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
@@ -65,6 +88,8 @@ pub struct Settings {
     // DISPLAY
     pub theme: Theme,
     pub animation_intensity: AnimationIntensity,
+    pub animation_style: AnimationStyle,
+    pub animation_quality: AnimationQuality,
     pub show_input: bool,
     pub show_output: bool,
     pub show_cached: bool,
@@ -102,6 +127,8 @@ impl Default for Settings {
             paused: false,
             theme: Theme::Dark,
             animation_intensity: AnimationIntensity::Normal,
+            animation_style: AnimationStyle::Fire,
+            animation_quality: AnimationQuality::Medium,
             show_input: true,
             show_output: true,
             show_cached: true,
@@ -266,6 +293,25 @@ mod tests {
         assert_eq!(s.polling_interval_secs, 5);
         assert_eq!(s.week_starts_on, 1);
         assert_eq!(s.retention_days, None);
+    }
+
+    #[test]
+    fn the_animation_defaults_to_the_classic_flame_at_medium_quality() {
+        let s = Settings::default();
+        assert_eq!(s.animation_style, AnimationStyle::Fire);
+        assert_eq!(s.animation_quality, AnimationQuality::Medium);
+    }
+
+    #[test]
+    fn the_chosen_animation_and_quality_persist_and_an_unknown_one_is_rejected() {
+        let (_d, db) = temp_db();
+        let store = SettingsStore::load(db.clone()).unwrap();
+        store.update(&serde_json::json!({"animationStyle": "hamster", "animationQuality": "high"})).unwrap();
+        let reloaded = SettingsStore::load(db).unwrap().get();
+        assert_eq!(reloaded.animation_style, AnimationStyle::Hamster);
+        assert_eq!(reloaded.animation_quality, AnimationQuality::High);
+        assert!(store.update(&serde_json::json!({"animationStyle": "dragon"})).is_err());
+        assert_eq!(store.get().animation_style, AnimationStyle::Hamster, "the old value survives a rejected one");
     }
 
     #[test]

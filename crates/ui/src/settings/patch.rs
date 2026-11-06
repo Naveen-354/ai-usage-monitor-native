@@ -1,7 +1,7 @@
 //! Settings diffing, patching, and validation logic.
 
 use serde::{Deserialize, Serialize};
-use crate::view::{self, AnimationIntensity, Corner, PeriodKey, Theme};
+use crate::view::{self, AnimationIntensity, AnimationQuality, AnimationStyle, Corner, PeriodKey, Theme};
 
 /// Represents partial changes to `view::Settings`.
 /// Each field is `Some(...)` only if modified.
@@ -25,6 +25,8 @@ pub struct SettingsPatch {
     pub paused: Option<bool>,
     pub theme: Option<Theme>,
     pub animation_intensity: Option<AnimationIntensity>,
+    pub animation_style: Option<AnimationStyle>,
+    pub animation_quality: Option<AnimationQuality>,
     pub show_input: Option<bool>,
     pub show_output: Option<bool>,
     pub show_cached: Option<bool>,
@@ -58,6 +60,8 @@ impl SettingsPatch {
             && self.paused.is_none()
             && self.theme.is_none()
             && self.animation_intensity.is_none()
+            && self.animation_style.is_none()
+            && self.animation_quality.is_none()
             && self.show_input.is_none()
             && self.show_output.is_none()
             && self.show_cached.is_none()
@@ -123,6 +127,12 @@ impl SettingsPatch {
         }
         if let Some(v) = self.animation_intensity {
             s.animation_intensity = v;
+        }
+        if let Some(v) = self.animation_style {
+            s.animation_style = v;
+        }
+        if let Some(v) = self.animation_quality {
+            s.animation_quality = v;
         }
         if let Some(v) = self.show_input {
             s.show_input = v;
@@ -246,6 +256,16 @@ pub fn diff(old: &view::Settings, new: &view::Settings) -> SettingsPatch {
         },
         animation_intensity: if old.animation_intensity != new.animation_intensity {
             Some(new.animation_intensity)
+        } else {
+            None
+        },
+        animation_style: if old.animation_style != new.animation_style {
+            Some(new.animation_style)
+        } else {
+            None
+        },
+        animation_quality: if old.animation_quality != new.animation_quality {
+            Some(new.animation_quality)
         } else {
             None
         },

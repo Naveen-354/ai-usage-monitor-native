@@ -9,9 +9,7 @@ use app_api::api::{BackendEvent, SettingsPatch};
 use app_api::store::AppStore;
 use app_api::view::{self, AnimationIntensity, AppInfo, Corner, Settings, Theme};
 use egui::{vec2, Color32, Pos2, Rect, ViewportCommand};
-use fire_engine::engine::{FireEngine, FlameState};
-use fire_engine::sim::{FIRE_H, FIRE_W};
-use fire_engine::XorShift64;
+use fire_engine::engine::FlameState;
 use native_platform::platform::autostart::Autostart;
 use native_platform::platform::overlay_window;
 use native_platform::platform::tray::{tooltip_text, TrayAction, TrayState};
@@ -20,6 +18,7 @@ use native_ui::motion::counter::AnimatedCounter;
 use native_ui::motion::format::{format_compact, panel_alpha, platform_alpha_floor};
 use native_ui::theme;
 use native_ui::web::all_agents::{self, Action as AgentsAction};
+use native_ui::web::five_hour;
 use native_ui::web::heatmap;
 use native_ui::web::hero::{self, Body, HERO_DIGITS};
 use native_ui::web::pages::{self, DiagnosticsData};
@@ -27,7 +26,8 @@ use native_ui::web::{with_alpha, Tokens};
 
 use crate::backend::AppBackend;
 use crate::bridge;
-use crate::flame::{flame_state, motion_factor, next_period, period_word, pop_scale};
+use crate::anim_host::AnimHost;
+use crate::flame::{engine_quality, engine_style, flame_state, motion_factor, next_period, period_word, pop_scale};
 use crate::layout::default_compact_size;
 use crate::placement::{self, Area};
 use crate::shell::{HotkeyKind, OverlayShared, Shell, ShellEvent};
@@ -36,7 +36,14 @@ const EXPANDED_SIZE: (f32, f32) = (480.0, 680.0);
 const POSITION_SAVE_DELAY: Duration = Duration::from_millis(700);
 /// How often the Statistics page re-reads the daily totals behind its heat map while it is open.
 const HEATMAP_REFRESH: Duration = Duration::from_secs(10);
+/// The agent whose rolling usage window the expanded overlay shows (Claude Code limits usage per 5 hours).
+const WINDOW_AGENT: &str = "claude";
+/// How often the expanded overlay re-reads that window (and so how often its countdown is redrawn) while it is open.
+const WINDOW_REFRESH: Duration = Duration::from_secs(20);
 const STEPPED_PULSE: Duration = Duration::from_millis(500);
+/// The Settings preview shows a surge this often, with this many tokens (a big jump: the whole show).
+const PREVIEW_SURGE_EVERY: Duration = Duration::from_secs(5);
+const PREVIEW_SURGE_TOKENS: f64 = 3_000_000.0;
 /// How long the floating +756K label animates (delta-float, 1.6 s).
 const FLOATER_MS: f32 = 1600.0;
 /// The main window of the old app: 1040 x 740, never smaller than 780 x 540.
@@ -72,14 +79,11 @@ pub struct App {
     events: Receiver<BackendEvent>,
     store: AppStore,
 
-    engine: FireEngine,
-    rng: XorShift64,
-    pixels: Vec<u8>,
-    texture: Option<egui::TextureHandle>,
-    fire_dirty: bool,
-    last_update: Instant,
-    accum_ms: f64,
-    motion: f64,
+    /// What the overlay animates (the flame or a chosen scene) and the texture it paints into.
+    fire: AnimHost,
+    /// The Settings page's live preview of the chosen style: it exists only while that page is open.
+    preview: Option<AnimHost>,
+    preview_surge_at: Instant,
 
     counter: Option<AnimatedCounter>,
     /// The count currently displayed (mid-animation it lags the real total).
@@ -106,9 +110,19 @@ pub struct App {
     placed_corner: Option<Corner>,
     saved_pos: Option<(i32, i32)>,
     heat: Option<HeatCache>,
+    window: Option<WindowCache>,
     pending_pos: Option<(Instant, (i32, i32))>,
     last_diag: Instant,
     started: Instant,
+}
+
+/// What the backend last said about the agent's usage window, and what it was read for.
+struct WindowCache {
+    at: Instant,
+    /// The settings that change what is counted, and the overview the read followed (new usage = a new overview).
+    key: (bool, Vec<String>, i64),
+    /// `Err` = it could not be read (the box then says so instead of claiming no window is open).
+    answer: Result<Option<view::UsageWindow>, ()>,
 }
 
 /// The daily totals the heat map draws, and what they were read for.
@@ -130,18 +144,14 @@ impl App {
         let saved_pos = store.settings.as_ref().and_then(|s| s.overlay_x.zip(s.overlay_y));
         let autostart = store.settings.as_ref().is_some_and(|s| s.start_with_system);
         let shortcuts = store.settings.as_ref().map(|s| [s.shortcut_toggle.clone(), s.shortcut_expand.clone(), s.shortcut_focus.clone()]);
+        let (style, quality) = store.settings.as_ref().map_or((fire_engine::Style::Fire, fire_engine::Quality::Medium), |s| (engine_style(s.animation_style), engine_quality(s.animation_quality)));
         Self {
             backend,
             events,
             store,
-            engine: FireEngine::new(),
-            rng: XorShift64::new(0x00C0_FFEE),
-            pixels: vec![0; FIRE_W * FIRE_H * 4],
-            texture: None,
-            fire_dirty: true,
-            last_update: Instant::now(),
-            accum_ms: 0.0,
-            motion: 1.0,
+            fire: AnimHost::new("fire", style, quality),
+            preview: None,
+            preview_surge_at: Instant::now(),
             counter: None,
             shown: 0.0,
             handled_surge: 0,
@@ -160,6 +170,7 @@ impl App {
             placed_corner: None,
             saved_pos,
             heat: None,
+            window: None,
             pending_pos: None,
             last_diag: Instant::now() - Duration::from_secs(10),
             started: Instant::now(),
@@ -482,44 +493,19 @@ impl App {
     // ---------------------------------------------------------------- fire + number
 
     fn step_fire_and_counter(&mut self, now: Instant, now_ms: i64, settings: &Settings) {
-        let elapsed = (now - self.last_update).as_secs_f64() * 1000.0;
-        self.last_update = now;
-
-        let motion = motion_factor(settings.animation_intensity);
-        let want = flame_state(self.store.overview.as_ref(), now_ms);
-        if want != self.engine.mode || (motion - self.motion).abs() > f64::EPSILON {
-            self.motion = motion;
-            self.engine.set_state(want, motion, &mut self.rng);
-            self.fire_dirty = true;
-        }
+        // The chosen animation and quality (a change drops the old animation and builds the new one).
+        self.fire.configure(engine_style(settings.animation_style), engine_quality(settings.animation_quality));
+        self.fire.step(now, flame_state(self.store.overview.as_ref(), now_ms), motion_factor(settings.animation_intensity));
 
         // A sudden jump in the total fires a burst scaled to its size.
         if let Some(s) = self.store.surge.clone() {
             if s.id != self.handled_surge {
                 self.handled_surge = s.id;
-                if let Some(b) = self.engine.blast(s.delta as f64, &mut self.rng) {
+                if let Some(b) = self.fire.blast(s.delta as f64) {
                     self.floater = Some((format_compact(s.delta as f64, 3), now_ms, b.magnitude as f32));
                     self.popping = Some((now_ms, b.pop as f32));
-                    self.fire_dirty = true;
                 }
             }
-        }
-
-        if self.engine.needs_loop() {
-            self.accum_ms += elapsed.min(250.0);
-            let frame = self.engine.frame_ms();
-            let mut ticks = 0;
-            while self.accum_ms >= frame && ticks < 4 {
-                self.engine.tick(frame, &mut self.rng);
-                self.accum_ms -= frame;
-                ticks += 1;
-                self.fire_dirty = true;
-            }
-            if ticks == 4 {
-                self.accum_ms = 0.0;
-            }
-        } else {
-            self.accum_ms = 0.0;
         }
 
         // The big number counts up to the new total instead of jumping.
@@ -538,32 +524,49 @@ impl App {
     }
 
     fn upload_fire(&mut self, ctx: &egui::Context) {
-        if !self.fire_dirty && self.texture.is_some() {
+        self.fire.upload(ctx);
+    }
+
+    /// The Settings page's live preview: always shows the chosen style at work (a surge every few seconds, so the big
+    /// moment can be seen too). It is built when the page opens and dropped when it closes, so it costs nothing otherwise.
+    fn step_preview(&mut self, ctx: &egui::Context, now: Instant, settings: &Settings) {
+        if !(self.main.open && self.main.page == Page::Settings) {
+            self.preview = None;
             return;
         }
-        self.engine.paint(&mut self.pixels);
-        let image = egui::ColorImage::from_rgba_unmultiplied([FIRE_W, FIRE_H], &self.pixels);
-        match &mut self.texture {
-            Some(t) => t.set(image, egui::TextureOptions::NEAREST),
-            None => self.texture = Some(ctx.load_texture("fire", image, egui::TextureOptions::NEAREST)),
+        let (style, quality) = (engine_style(settings.animation_style), engine_quality(settings.animation_quality));
+        let motion = motion_factor(settings.animation_intensity);
+        let host = self.preview.get_or_insert_with(|| AnimHost::new("preview", style, quality));
+        host.configure(style, quality);
+        host.step(now, FlameState::Live, motion);
+        if now.duration_since(self.preview_surge_at) >= PREVIEW_SURGE_EVERY {
+            self.preview_surge_at = now;
+            host.blast(PREVIEW_SURGE_TOKENS);
         }
-        self.fire_dirty = false;
+        host.upload(ctx);
     }
 
     fn schedule_repaint(&self, ctx: &egui::Context, settings: &Settings) {
         let mut next: Option<Duration> = None;
         let mut want = |d: Duration| next = Some(next.map_or(d, |n| n.min(d)));
-        if let Some(ms) = self.engine.next_repaint() {
+        for ms in [self.fire.next_repaint(), self.preview.as_ref().and_then(|p| p.next_repaint())].into_iter().flatten() {
             want(Duration::from_millis(ms as u64));
+        }
+        if self.preview.is_some() {
+            want(PREVIEW_SURGE_EVERY); // wake for the next demo surge even when the preview itself stands still
         }
         if self.counter.as_ref().is_some_and(|c| c.is_animating()) || self.floater.is_some() || self.popping.is_some() {
             want(Duration::from_millis(33));
         }
-        if self.engine.mode == FlameState::Live && settings.animation_intensity != AnimationIntensity::Off {
+        if self.fire.mode() == FlameState::Live && settings.animation_intensity != AnimationIntensity::Off {
             want(STEPPED_PULSE);
         }
         if self.main.open && self.main.page == Page::Diagnostics {
             want(Duration::from_secs(1));
+        }
+        // The expanded overlay counts down to the window's end: redraw (and re-read) now and then while one is open.
+        if !settings.compact_mode && self.window.as_ref().is_some_and(|c| matches!(c.answer, Ok(Some(_)))) {
+            want(WINDOW_REFRESH);
         }
         if let Some(d) = next {
             ctx.request_repaint_after(d);
@@ -602,7 +605,7 @@ impl App {
             compact,
             num_scale: settings.token_text_size,
             body: self.hero_body(),
-            live: self.engine.mode == FlameState::Live,
+            live: self.fire.mode() == FlameState::Live,
             period_label: period_word(settings.period),
             agents: overview.map(|o| o.agents.as_slice()).unwrap_or(&[]),
             now_ms,
@@ -610,7 +613,7 @@ impl App {
             intensity: settings.animation_intensity,
             tag,
             pin_on: settings.always_on_top,
-            fire: self.texture.as_ref().map(|t| t.id()),
+            fire: self.fire.texture_id(),
             floater,
             pop: self.pop_scale(now_ms),
         }
@@ -670,6 +673,15 @@ impl App {
         let mut actions: Vec<AgentsAction> = Vec::new();
         let mut open: Option<&'static str> = None;
         let alpha = Self::backing_alpha(settings);
+        // The 5-hour window box: only for an agent that is listed and turned on, and only once it has been read.
+        self.refresh_window(settings);
+        let window_agent = self
+            .store
+            .overview
+            .as_ref()
+            .and_then(|o| all_agents::picked(Some(WINDOW_AGENT), &o.agents))
+            .map(|a| (a.name.clone(), native_ui::web::agent_color(&a.color)));
+        let window_answer = self.window.as_ref().map(|c| c.answer);
         egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
             let full = ui.max_rect();
             if alpha > 0.0 {
@@ -684,6 +696,11 @@ impl App {
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(more));
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut inner, |ui| {
                 egui::Frame::none().inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 14.0, bottom: 16.0 }).show(ui, |ui| {
+                    if let (Some((name, color)), Some(state)) = (&window_agent, five_hour::state_for(window_answer.as_ref(), now_ms)) {
+                        let time_ms = self.started.elapsed().as_millis() as u64;
+                        five_hour::show(ui, &five_hour::Props { tokens: t, name, color: *color, state, now_ms, time_ms, intensity: settings.animation_intensity });
+                        ui.add_space(14.0);
+                    }
                     let props = all_agents::Props { tokens: t, overview: self.store.overview.as_ref(), settings, now_ms, time_ms: self.started.elapsed().as_millis() as u64, hide_headline: true, selected: None };
                     actions = all_agents::show(ui, &props);
                     open = all_agents::overlay_actions(ui, &t);
@@ -723,6 +740,18 @@ impl App {
         }
     }
 
+    /// Reads the agent's usage window for the expanded overlay: at most every few seconds, and at once when new usage
+    /// arrived (the overview changed) or a setting that changes what is counted (enabled agents, cached tokens) changed.
+    fn refresh_window(&mut self, settings: &Settings) {
+        let Some(generated) = self.store.overview.as_ref().map(|o| o.generated_at_utc_ms) else { return };
+        let key = (settings.count_cached_in_total, settings.enabled_agents.clone(), generated);
+        if self.window.as_ref().is_some_and(|c| c.key == key && c.at.elapsed() < WINDOW_REFRESH) {
+            return;
+        }
+        let answer = self.backend.usage_window(WINDOW_AGENT).map_err(|_| ());
+        self.window = Some(WindowCache { at: Instant::now(), key, answer });
+    }
+
     /// Reads the daily totals for the heat map: when the Statistics page is first shown, then at most every few seconds,
     /// and at once when something that changes what is counted changes: the enabled agents, cached tokens, or the agent
     /// picked on the page.
@@ -749,6 +778,7 @@ impl App {
         let heat_days: Option<Vec<view::DayTotal>> = self.heat.as_ref().and_then(|h| h.days.clone());
         let selected: Option<String> = self.main.agent.clone();
         let mut pick: Option<Option<String>> = None; // Some(None) = ALL was pressed
+        let mut open_cmd: Option<String> = None; // OPEN CMD was pressed for this agent id
         let today = chrono::Local::now().date_naive();
         let t = Tokens::for_theme(settings.theme);
         let mut page = self.main.page;
@@ -763,6 +793,7 @@ impl App {
         let mut quit = false;
         let mut reload = false;
         let mut period: Option<view::PeriodKey> = None;
+        let preview_tex = self.preview.as_ref().and_then(|p| p.texture_id());
 
         let builder = egui::ViewportBuilder::default().with_title("AI Usage Monitor").with_inner_size(main_size()).with_min_inner_size(MAIN_MIN);
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("main-window"), builder, |ctx, _class| {
@@ -789,7 +820,7 @@ impl App {
                     Page::Statistics => pages::page(ui, |ui| {
                         let agents = overview.as_ref().map(|o| o.agents.as_slice()).unwrap_or(&[]);
                         let agent = all_agents::picked(selected.as_deref(), agents);
-                        let pressed_all = heatmap::show(
+                        let pressed = heatmap::show(
                             ui,
                             &heatmap::Props {
                                 tokens: t,
@@ -798,11 +829,17 @@ impl App {
                                 has_numbers: agent.map_or_else(|| overview.as_ref().is_some_and(|o| o.totals.is_some()), |a| a.totals.is_some()),
                                 today,
                                 week_start: settings.week_starts_on,
-                                agent: agent.map(|a| heatmap::AgentFilter { name: &a.name, color: native_ui::web::agent_color(&a.color) }),
+                                agent: agent.map(|a| heatmap::AgentFilter {
+                                    name: &a.name,
+                                    color: native_ui::web::agent_color(&a.color),
+                                    can_open: crate::terminal::command_for(&a.id).is_some(),
+                                }),
                             },
                         );
-                        if pressed_all {
-                            pick = Some(None);
+                        match pressed {
+                            Some(heatmap::Action::ShowAll) => pick = Some(None),
+                            Some(heatmap::Action::OpenTerminal) => open_cmd = agent.map(|a| a.id.clone()),
+                            None => {}
                         }
                         ui.add_space(24.0);
                         let props = all_agents::Props { tokens: t, overview: overview.as_ref(), settings, now_ms, time_ms, hide_headline: false, selected: agent.map(|a| a.id.as_str()) };
@@ -815,7 +852,7 @@ impl App {
                     }),
                     Page::Settings => {
                         let agents = overview.as_ref().map(|o| o.agents.as_slice()).unwrap_or(&[]);
-                        let o = pages::settings_page(ui, &t, settings, agents);
+                        let o = pages::settings_page(ui, &t, settings, agents, preview_tex);
                         edit = o.changed;
                         quit = o.quit;
                     }
@@ -831,6 +868,9 @@ impl App {
         self.main.page = page;
         if let Some(p) = pick {
             self.main.agent = p;
+        }
+        if let Some(id) = open_cmd {
+            self.open_terminal(&id);
         }
         if close {
             self.main.open = false;
@@ -848,6 +888,16 @@ impl App {
         if quit {
             self.backend.quit();
         }
+    }
+
+    /// The Statistics page's OPEN CMD: a command prompt running the picked agent's tool. A window opening is its own
+    /// confirmation, so success says nothing (and drops an earlier failure's message); a failure says why in the status bar.
+    fn open_terminal(&mut self, agent_id: &str) {
+        let name = self.store.overview.as_ref().and_then(|o| o.agents.iter().find(|a| a.id == agent_id)).map_or_else(|| agent_id.to_string(), |a| a.name.clone());
+        self.main.status = match self.backend.open_terminal(agent_id) {
+            Ok(()) => None,
+            Err(e) => Some(format!("could not open {name}: {e}")),
+        };
     }
 
     /// The Diagnostics page's RELOAD AGENTS: look for every supported agent on this computer again. The table fills in as
@@ -908,6 +958,7 @@ impl eframe::App for App {
         self.sync_autostart(&settings);
         self.step_fire_and_counter(now, now_ms, &settings);
         self.upload_fire(ctx);
+        self.step_preview(ctx, now, &settings);
         let settings = self.store.settings.clone().unwrap_or(settings);
         if settings.compact_mode {
             self.compact_ui(ctx, &settings, now_ms);

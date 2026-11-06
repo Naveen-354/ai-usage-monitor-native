@@ -38,7 +38,7 @@ pub fn square_checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<WidgetTe
                 rect,
                 0.0,
                 if *checked { ui.visuals().selection.bg_fill } else { Color32::TRANSPARENT },
-                Stroke::new(2.0, stroke_color),
+                Stroke::new(2.0_f32, stroke_color),
             );
             
             // If checked, draw a high contrast checkmark or just a solid fill.
@@ -103,7 +103,7 @@ pub fn segmented_select<T: PartialEq + Clone>(
             
             if ui.is_rect_visible(rect) {
                 // Draw borders: 2px hard border. We need to avoid double borders between segments.
-                let stroke = Stroke::new(2.0, ui.visuals().widgets.noninteractive.fg_stroke.color);
+                let stroke = Stroke::new(2.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color);
                 
                 ui.painter().rect(
                     rect,
@@ -173,7 +173,7 @@ pub fn flat_slider(
             ui.painter().rect_stroke(
                 rect,
                 0.0,
-                Stroke::new(2.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                Stroke::new(2.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color),
             );
             
             // Fill
@@ -209,7 +209,7 @@ pub fn labelled_text_input(
         // Wrap egui TextEdit in our brutalist frame manually or configure frame
         let mut frame = egui::Frame::default()
             .inner_margin(Margin::same(4.0))
-            .stroke(Stroke::new(2.0, ui.visuals().widgets.noninteractive.fg_stroke.color));
+            .stroke(Stroke::new(2.0_f32, ui.visuals().widgets.noninteractive.fg_stroke.color));
         
         if error.is_some() {
             frame.stroke.color = Color32::RED;

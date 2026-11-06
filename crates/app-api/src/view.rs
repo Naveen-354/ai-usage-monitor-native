@@ -105,6 +105,29 @@ pub enum AnimationIntensity {
     Normal,
 }
 
+/// What the overlay animates while agents work (`Fire` is the original flame).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnimationStyle {
+    Fire,
+    Hamster,
+    Duck,
+    Slots,
+    Pig,
+    Cat,
+    Muncher,
+    Spitter,
+}
+
+/// How sharp and smooth the animated scenes are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnimationQuality {
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Corner {
@@ -137,6 +160,8 @@ pub struct Settings {
     pub paused: bool,
     pub theme: Theme,
     pub animation_intensity: AnimationIntensity,
+    pub animation_style: AnimationStyle,
+    pub animation_quality: AnimationQuality,
     pub show_input: bool,
     pub show_output: bool,
     pub show_cached: bool,
@@ -204,6 +229,19 @@ pub struct TimelineBucket {
 pub struct DayTotal {
     pub date: String,
     pub total: u64,
+}
+
+/// The rolling usage window an agent is in right now (Claude Code: 5 hours). **An estimate** built from this computer's
+/// own events: the provider's real figure is not stored on disk. The window opened with the first request after the previous
+/// one ended and closes 5 hours later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageWindow {
+    pub start_utc_ms: i64,
+    pub resets_utc_ms: i64,
+    /// Tokens inside the window, counted like the overview counts them.
+    pub tokens: u64,
+    pub events: u64,
 }
 
 /// History for the Statistics page. `buckets` is ascending by time and gap-free (empty buckets have total 0).

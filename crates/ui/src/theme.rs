@@ -114,20 +114,20 @@ pub fn apply(ctx: &egui::Context, theme: crate::view::Theme) {
     visuals.dark_mode = is_dark;
     visuals.override_text_color = Some(pal.ink);
 
-    let border_stroke = Stroke::new(2.0, pal.ink);
+    let border_stroke = Stroke::new(2.0_f32, pal.ink);
 
     // Noninteractive
     visuals.widgets.noninteractive.bg_fill = pal.bg;
     visuals.widgets.noninteractive.weak_bg_fill = pal.bg;
     visuals.widgets.noninteractive.bg_stroke = border_stroke;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, pal.ink);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, pal.ink);
     visuals.widgets.noninteractive.rounding = Rounding::ZERO;
 
     // Inactive
     visuals.widgets.inactive.bg_fill = pal.bg;
     visuals.widgets.inactive.weak_bg_fill = pal.bg;
     visuals.widgets.inactive.bg_stroke = border_stroke;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, pal.ink);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, pal.ink);
     visuals.widgets.inactive.rounding = Rounding::ZERO;
 
     // Hovered: high-contrast subtle flat tone
@@ -138,26 +138,26 @@ pub fn apply(ctx: &egui::Context, theme: crate::view::Theme) {
     };
     visuals.widgets.hovered.weak_bg_fill = visuals.widgets.hovered.bg_fill;
     visuals.widgets.hovered.bg_stroke = border_stroke;
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, pal.ink);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, pal.ink);
     visuals.widgets.hovered.rounding = Rounding::ZERO;
 
     // Active
     visuals.widgets.active.bg_fill = pal.accent;
     visuals.widgets.active.weak_bg_fill = pal.accent;
     visuals.widgets.active.bg_stroke = border_stroke;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, pal.selection_fg);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, pal.selection_fg);
     visuals.widgets.active.rounding = Rounding::ZERO;
 
     // Open
     visuals.widgets.open.bg_fill = pal.bg;
     visuals.widgets.open.weak_bg_fill = pal.bg;
     visuals.widgets.open.bg_stroke = border_stroke;
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, pal.ink);
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, pal.ink);
     visuals.widgets.open.rounding = Rounding::ZERO;
 
     // Selection
     visuals.selection.bg_fill = pal.selection_bg;
-    visuals.selection.stroke = Stroke::new(1.0, pal.selection_fg);
+    visuals.selection.stroke = Stroke::new(1.0_f32, pal.selection_fg);
 
     // Hard corners, no shadows
     visuals.window_rounding = Rounding::ZERO;
@@ -293,7 +293,7 @@ pub fn brutal_button_styled(
 
         // Draw button face
         ui.painter().rect_filled(face_rect, Rounding::ZERO, pal.bg);
-        ui.painter().rect_stroke(face_rect, Rounding::ZERO, Stroke::new(2.0, border_color));
+        ui.painter().rect_stroke(face_rect, Rounding::ZERO, Stroke::new(2.0_f32, border_color));
 
         // Center text
         let text_pos = face_rect.center() - galley.size() / 2.0;
@@ -325,7 +325,7 @@ pub fn toggle_button(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
         let bg_fill = if *on { pal.accent } else { pal.bg };
         // Outer box: 2px hard border
         ui.painter().rect_filled(rect, Rounding::ZERO, bg_fill);
-        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, pal.ink));
+        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0_f32, pal.ink));
 
         // Slider thumb: 14x14 square
         let thumb_x = if *on {
@@ -367,7 +367,7 @@ pub fn tag(ui: &mut egui::Ui, text: &str, style: TagStyle) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
 
     if ui.is_rect_visible(rect) {
-        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, color));
+        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0_f32, color));
         let text_pos = rect.center() - galley.size() / 2.0;
         ui.painter().galley(text_pos, galley, color);
     }
@@ -410,7 +410,7 @@ pub fn chip(ui: &mut egui::Ui, text: &str, is_on: bool) -> egui::Response {
         };
 
         ui.painter().rect_filled(rect, Rounding::ZERO, current_bg);
-        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, border_color));
+        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0_f32, border_color));
 
         let text_pos = rect.center() - galley.size() / 2.0;
         ui.painter().galley_with_override_text_color(text_pos, galley, current_fg);
@@ -437,7 +437,7 @@ pub fn bar(ui: &mut egui::Ui, fraction: f32, color: Color32) -> egui::Response {
     if ui.is_rect_visible(rect) {
         // Outer border
         ui.painter().rect_filled(rect, Rounding::ZERO, pal.bg);
-        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0, pal.ink));
+        ui.painter().rect_stroke(rect, Rounding::ZERO, Stroke::new(2.0_f32, pal.ink));
 
         // Inner fill
         if clamped > 0.0 {
@@ -477,7 +477,7 @@ pub fn section_header(ui: &mut egui::Ui, title: &str) -> egui::Response {
         let line_y = rect.max.y - 1.0;
         ui.painter().line_segment(
             [egui::pos2(rect.min.x, line_y), egui::pos2(rect.max.x, line_y)],
-            Stroke::new(2.0, pal.ink),
+            Stroke::new(2.0_f32, pal.ink),
         );
     }
 
@@ -499,7 +499,7 @@ pub fn divider(ui: &mut egui::Ui) -> egui::Response {
         let line_y = rect.center().y;
         ui.painter().line_segment(
             [egui::pos2(rect.min.x, line_y), egui::pos2(rect.max.x, line_y)],
-            Stroke::new(2.0, pal.ink),
+            Stroke::new(2.0_f32, pal.ink),
         );
     }
 
@@ -538,7 +538,7 @@ pub fn stat(ui: &mut egui::Ui, label: &str, value: &str) -> egui::Response {
 
         // Subtle bottom border
         let line_y = rect.max.y - 1.0;
-        let dim_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(pal.ink.r(), pal.ink.g(), pal.ink.b(), 60));
+        let dim_stroke = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(pal.ink.r(), pal.ink.g(), pal.ink.b(), 60));
         ui.painter().line_segment(
             [egui::pos2(rect.min.x, line_y), egui::pos2(rect.max.x, line_y)],
             dim_stroke,

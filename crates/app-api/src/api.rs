@@ -1,4 +1,4 @@
-use crate::view::{AppInfo, Availability, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use crate::view::{AppInfo, Availability, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
 use std::sync::mpsc::Receiver;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -20,6 +20,8 @@ pub struct SettingsPatch {
     pub paused: Option<bool>,
     pub theme: Option<crate::view::Theme>,
     pub animation_intensity: Option<crate::view::AnimationIntensity>,
+    pub animation_style: Option<crate::view::AnimationStyle>,
+    pub animation_quality: Option<crate::view::AnimationQuality>,
     pub show_input: Option<bool>,
     pub show_output: Option<bool>,
     pub show_cached: Option<bool>,
@@ -76,6 +78,9 @@ pub trait Backend: Send + Sync {
     /// left out). Counts the same things the overview counts. This is what the activity heat map draws. `agent` (an
     /// agent id) limits it to that one agent's usage; `None` is every enabled agent.
     fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError>;
+    /// The rolling usage window `agent` (an agent id) is in right now, or `None` when none is open or the agent is off.
+    /// An estimate from this computer's events only; see [`UsageWindow`].
+    fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>, BackendError>;
     fn settings(&self) -> Result<Settings, BackendError>;
     fn update_settings(&self, patch: SettingsPatch) -> Result<Settings, BackendError>;
     fn app_info(&self) -> Result<AppInfo, BackendError>;

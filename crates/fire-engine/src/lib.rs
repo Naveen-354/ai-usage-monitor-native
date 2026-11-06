@@ -4,6 +4,13 @@ pub mod blast;
 pub mod engine;
 pub mod palette;
 
+pub mod animation;
+pub mod canvas;
+pub mod scene;
+pub mod scenes;
+
+pub use animation::{create, Animation, Quality, Style};
+
 pub trait Rng {
     fn gen_f64(&mut self) -> f64;
 }

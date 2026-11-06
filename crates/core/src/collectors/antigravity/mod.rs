@@ -48,16 +48,23 @@ struct DbState {
     max_idx: i64,
 }
 
-/// Size and mtime of a database *including its WAL*, since a live agent writes to `<db>-wal` first.
+/// Size and mtime of a database *including its WAL and SHM*, since a live agent writes to `<db>-wal`
+/// and `<db>-shm` first.
 fn db_stat(path: &Path) -> Option<(u64, i64)> {
     let main = std::fs::metadata(path).ok()?;
     let mut size = main.len();
     let mut mtime = mtime_ms(&main);
     let mut wal = path.as_os_str().to_owned();
     wal.push("-wal");
-    if let Ok(w) = std::fs::metadata(PathBuf::from(wal)) {
+    if let Ok(w) = std::fs::metadata(PathBuf::from(&wal)) {
         size += w.len();
         mtime = mtime.max(mtime_ms(&w));
+    }
+    let mut shm = path.as_os_str().to_owned();
+    shm.push("-shm");
+    if let Ok(s) = std::fs::metadata(PathBuf::from(&shm)) {
+        size += s.len();
+        mtime = mtime.max(mtime_ms(&s));
     }
     Some((size, mtime))
 }
@@ -186,8 +193,8 @@ impl AgentCollector for AntigravityCollector {
     }
 
     fn watch_specs(&self, d: &Detection) -> Vec<WatchSpec> {
-        // A live agent writes to `<db>-wal` first, so watch both.
-        d.roots.iter().map(|p| WatchSpec { path: p.clone(), recursive: false, suffixes: &[".db", ".db-wal"] }).collect()
+        // A live agent writes to `<db>-wal` and `<db>-shm` first, so watch all.
+        d.roots.iter().map(|p| WatchSpec { path: p.clone(), recursive: false, suffixes: &[".db", ".db-wal", ".db-shm"] }).collect()
     }
 
     fn collect_usage(&self, ctx: &CollectCtx<'_>, sink: &mut dyn BatchSink) -> Result<CollectSummary, CollectError> {

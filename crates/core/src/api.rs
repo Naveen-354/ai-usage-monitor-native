@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Local, NaiveDate, Utc};
 
-use crate::aggregation::{self, build_overview, custom_range, range_for, DayTotal, Overview, Period};
+use crate::aggregation::{self, build_overview, custom_range, range_for, DayTotal, Overview, Period, UsageWindow};
 use crate::collectors::{self, Env};
 use crate::database::{queries, Database};
 use crate::error::{AppError, Result};
@@ -115,6 +115,13 @@ impl Core {
         let settings = self.settings.get();
         let today = Local::now().date_naive();
         self.db.with_reader(|c| aggregation::daily_totals(c, &settings, &Local, today, days, agent))
+    }
+
+    /// The rolling usage window `agent` is in right now (Claude Code: 5 hours), or `None` when none is open. An estimate
+    /// built from this machine's events only; see [`aggregation::current_window`].
+    pub fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>> {
+        let settings = self.settings.get();
+        self.db.with_reader(|c| aggregation::current_window(c, &settings, agent, Utc::now().timestamp_millis()))
     }
 
     pub fn settings(&self) -> Settings {

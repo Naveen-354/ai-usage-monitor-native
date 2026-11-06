@@ -4,7 +4,7 @@ use crate::sim::{FireParams, FireSim, FIRE_H, FIRE_W};
 use crate::sparks::{SparkKind, Sparks};
 use crate::Rng;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FlameState {
     Live,
     Idle,

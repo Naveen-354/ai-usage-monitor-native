@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use ai_usage_monitor_core::aggregation::Period;
 use ai_usage_monitor_core::api::{Config, Core, CoreEvent};
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
 
 use crate::bridge;
 
@@ -26,11 +26,17 @@ pub trait AppBackend: Backend {
     /// Updated by the UI thread so Diagnostics can show what the OS reports about the overlay.
     fn set_overlay_diagnostics(&self, d: OverlayDiagnostics);
     fn quit_requested(&self) -> bool;
+    /// Opens a command prompt running the command-line tool of the agent `agent_id` (the heat map's OPEN CMD). The demo
+    /// has nothing to start and says so.
+    fn open_terminal(&self, agent_id: &str) -> Result<(), BackendError>;
     /// Stops background work and checkpoints the database. Later calls return errors instead of panicking.
     fn shutdown(&self);
 }
 
 impl AppBackend for CoreBackend {
+    fn open_terminal(&self, agent_id: &str) -> Result<(), BackendError> {
+        crate::terminal::open(agent_id).map_err(err)
+    }
     fn update_settings_json(&self, patch: &serde_json::Value) -> Result<Settings, BackendError> {
         CoreBackend::update_settings_json(self, patch)
     }
@@ -190,6 +196,13 @@ impl Backend for CoreBackend {
         self.with_core(|c| {
             let days = c.daily_totals(days, agent).map_err(err)?;
             bridge::convert(&days).map_err(BackendError::Message)
+        })
+    }
+
+    fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>, BackendError> {
+        self.with_core(|c| {
+            let window = c.usage_window(agent).map_err(err)?;
+            bridge::convert(&window).map_err(BackendError::Message)
         })
     }
 
@@ -399,6 +412,17 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_backend_has_no_window_and_a_window_converts_to_the_view_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = backend(&dir);
+        assert_eq!(b.usage_window("claude").unwrap(), None, "no usage yet means no window, not an empty one");
+        let core = ai_usage_monitor_core::aggregation::UsageWindow { start_utc_ms: 1_000, resets_utc_ms: 1_000 + 5 * 3_600_000, tokens: 42, events: 3 };
+        let view: Option<UsageWindow> = bridge::convert(&Some(core)).unwrap();
+        assert_eq!(view, Some(UsageWindow { start_utc_ms: 1_000, resets_utc_ms: 18_001_000, tokens: 42, events: 3 }));
+        b.shutdown();
+    }
+
+    #[test]
     fn quit_sets_a_flag_and_shutdown_makes_later_calls_fail_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         let b = backend(&dir);
@@ -408,6 +432,7 @@ mod tests {
         b.shutdown();
         assert!(b.settings().is_err());
         assert!(b.daily_totals(371, None).is_err());
+        assert!(b.usage_window("claude").is_err());
         assert!(b.reload_agents().is_err(), "a reload after shutdown is an error, not a hang or a panic");
         b.shutdown(); // idempotent
     }

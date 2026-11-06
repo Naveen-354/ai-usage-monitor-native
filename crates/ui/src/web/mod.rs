@@ -5,6 +5,7 @@
 //! (licences are in `assets/fonts`).
 
 pub mod all_agents;
+pub mod five_hour;
 pub mod fmt;
 pub mod fonts;
 pub mod heatmap;

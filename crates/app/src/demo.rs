@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use app_api::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
 use app_api::mock;
-use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings};
+use app_api::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
 use serde_json::Value;
 
 use crate::backend::AppBackend;
@@ -98,6 +98,11 @@ impl Backend for DemoBackend {
 
     fn daily_totals(&self, days: u32, agent: Option<&str>) -> Result<Vec<DayTotal>, BackendError> {
         Ok(mock::daily_totals(chrono::Local::now().date_naive(), days, agent))
+    }
+
+    fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>, BackendError> {
+        // Relative to the real clock, so a demo screenshot always shows a window that is open.
+        Ok(mock::usage_window(chrono::Utc::now().timestamp_millis(), agent))
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {
@@ -203,6 +208,10 @@ impl AppBackend for DemoBackend {
 
     fn quit_requested(&self) -> bool {
         self.quit.load(Ordering::SeqCst)
+    }
+
+    fn open_terminal(&self, _agent_id: &str) -> Result<(), BackendError> {
+        Err(demo_only("opening a command prompt"))
     }
 
     fn shutdown(&self) {}

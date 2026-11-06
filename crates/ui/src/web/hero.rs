@@ -216,7 +216,7 @@ fn chip(ui: &mut Ui, t: &Tokens, spec: &ChipSpec, rect: Rect, visible: f32) -> e
         // 10 x 10 crisp icon, centred; stroke 1.6
         let origin = rect.center() - Vec2::splat(5.0);
         for [a, b] in lines {
-            p.line_segment([origin + a.to_vec2(), origin + b.to_vec2()], Stroke::new(1.6, with_alpha(fg, visible)));
+            p.line_segment([origin + a.to_vec2(), origin + b.to_vec2()], Stroke::new(1.6_f32, with_alpha(fg, visible)));
         }
     }
     resp
