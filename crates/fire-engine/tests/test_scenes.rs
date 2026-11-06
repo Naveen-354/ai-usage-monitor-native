@@ -207,6 +207,10 @@ fn the_data_scenes_draw_the_days_numbers() {
         // the tank is as full as the day is
         let (empty, full) = (Data { level: 0.05, ..Data::default() }, Data { level: 0.95, ..Data::default() });
         assert_ne!(paint(Style::Tank, mode, empty), paint(Style::Tank, mode, full), "tank {mode:?}: the level is not drawn");
+        // the pet has evolved further and the receipt has more paper out on a fuller day
+        for style in [Style::Pet, Style::Receipt] {
+            assert_ne!(paint(style, mode, empty), paint(style, mode, full), "{style:?} {mode:?}: the day's level is not drawn");
+        }
         // the equalizer has one bar per agent, in that agent's colour
         assert_ne!(paint(Style::Equalizer, mode, agents(2)), paint(Style::Equalizer, mode, agents(6)), "equalizer {mode:?}: the agents are not drawn");
         let mut recoloured = agents(4);
@@ -218,9 +222,9 @@ fn the_data_scenes_draw_the_days_numbers() {
 #[test]
 fn the_pulse_follows_the_recent_surges() {
     // after a few surges the heartbeat is busier than the same moment with none
-    let run = |surges: usize| {
+    let run = |style: Style, surges: usize| {
         let mut rng = XorShift64::new(7);
-        let mut a = create(Style::Heartbeat, Quality::Medium);
+        let mut a = create(style, Quality::Medium);
         a.set_state(FlameState::Live, 1.0, &mut rng);
         for _ in 0..surges {
             a.blast(5_000_000.0, &mut rng);
@@ -233,7 +237,9 @@ fn the_pulse_follows_the_recent_surges() {
         }
         frame(a.as_mut())
     };
-    assert_ne!(run(0), run(3), "the heartbeat ignores the token rate");
+    for style in [Style::Heartbeat, Style::Receipt] {
+        assert_ne!(run(style, 0), run(style, 3), "{style:?} ignores the token rate");
+    }
 }
 
 #[test]

@@ -126,6 +126,10 @@ pub enum AnimationStyle {
     Tank,
     Equalizer,
     Warp,
+    Shoggoth,
+    Receipt,
+    Pet,
+    Paperclip,
 }
 
 /// How sharp and smooth the animated scenes are.

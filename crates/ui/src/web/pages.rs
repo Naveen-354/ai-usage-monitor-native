@@ -86,7 +86,7 @@ const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 const CORNERS: [(Corner, &str); 5] = [(Corner::TopRight, "Top right"), (Corner::TopLeft, "Top left"), (Corner::BottomRight, "Bottom right"), (Corner::BottomLeft, "Bottom left"), (Corner::Custom, "Custom (dragged)")];
 
 /// The animations on offer, in the order of the drop-down.
-pub const STYLES: [(AnimationStyle, &str); 17] = [
+pub const STYLES: [(AnimationStyle, &str); 21] = [
     (AnimationStyle::Fire, "Fire (classic)"),
     (AnimationStyle::Hamster, "Hamster wheel"),
     (AnimationStyle::Duck, "Rubber duck"),
@@ -104,6 +104,10 @@ pub const STYLES: [(AnimationStyle, &str); 17] = [
     (AnimationStyle::Tank, "Water tank (the day's tokens)"),
     (AnimationStyle::Equalizer, "Agent equalizer (one bar each)"),
     (AnimationStyle::Warp, "Starfield warp"),
+    (AnimationStyle::Shoggoth, "Smiley shoggoth"),
+    (AnimationStyle::Receipt, "Receipt spool (token rate)"),
+    (AnimationStyle::Pet, "Pocket pet (evolves with the day)"),
+    (AnimationStyle::Paperclip, "Vibe paperclip"),
 ];
 pub const QUALITIES: [(AnimationQuality, &str); 3] = [(AnimationQuality::Low, "Low (lightest)"), (AnimationQuality::Medium, "Medium"), (AnimationQuality::High, "High (sharpest)")];
 /// What each quality costs, said under the picker. The canvas is one byte per pixel, so even High stays far under a megabyte.

@@ -13,7 +13,11 @@ pub mod heartbeat;
 pub mod muncher;
 pub mod octopus;
 pub mod panda;
+pub mod paperclip;
+pub mod pet;
 pub mod pig;
+pub mod receipt;
+pub mod shoggoth;
 pub mod slots;
 pub mod snail;
 pub mod spitter;
@@ -40,5 +44,9 @@ pub fn make(style: Style) -> Option<Box<dyn Scene>> {
         Style::Tank => Box::new(tank::Tank::new()),
         Style::Equalizer => Box::new(equalizer::Equalizer::new()),
         Style::Warp => Box::new(warp::Warp::new()),
+        Style::Shoggoth => Box::new(shoggoth::Shoggoth::new()),
+        Style::Receipt => Box::new(receipt::Receipt::new()),
+        Style::Pet => Box::new(pet::Pet::new()),
+        Style::Paperclip => Box::new(paperclip::Paperclip::new()),
     })
 }

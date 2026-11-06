@@ -30,10 +30,18 @@ pub enum Style {
     /// One bar per agent.
     Equalizer,
     Warp,
+    /// The AI meme: a many-eyed blob behind a smiley mask.
+    Shoggoth,
+    /// A receipt printer: paper speed is the token rate, how much paper hangs out is how full the day is.
+    Receipt,
+    /// A handheld pet that evolves as the day fills.
+    Pet,
+    /// A bent-wire paperclip in sunglasses, vibe coding.
+    Paperclip,
 }
 
 impl Style {
-    pub const ALL: [Style; 17] = [
+    pub const ALL: [Style; 21] = [
         Style::Fire,
         Style::Hamster,
         Style::Duck,
@@ -51,6 +59,10 @@ impl Style {
         Style::Tank,
         Style::Equalizer,
         Style::Warp,
+        Style::Shoggoth,
+        Style::Receipt,
+        Style::Pet,
+        Style::Paperclip,
     ];
 }
 

@@ -29,6 +29,10 @@ fn style_of(name: &str) -> Style {
         "tank" => Style::Tank,
         "equalizer" => Style::Equalizer,
         "warp" => Style::Warp,
+        "shoggoth" => Style::Shoggoth,
+        "receipt" => Style::Receipt,
+        "pet" => Style::Pet,
+        "paperclip" => Style::Paperclip,
         other => panic!("unknown style {other}"),
     }
 }
