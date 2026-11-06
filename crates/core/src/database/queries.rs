@@ -78,6 +78,35 @@ pub fn totals_by_agent(conn: &Connection, start_ms: i64, end_ms: i64) -> Result<
     Ok(out)
 }
 
+/// Totals per (agent, account) for buckets in `[start_ms, end_ms)`.
+pub fn totals_by_account(conn: &Connection, start_ms: i64, end_ms: i64) -> Result<HashMap<(String, String), Counters>> {
+    let mut st = conn.prepare_cached(
+        "SELECT agent_id, account_id, SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens),
+                SUM(reasoning_tokens), SUM(estimated_tokens), SUM(events)
+         FROM usage_buckets WHERE bucket_utc_s >= ?1 AND bucket_utc_s < ?2 GROUP BY agent_id, account_id",
+    )?;
+    let rows = st.query_map(params![start_ms.div_euclid(1000), end_ms.div_euclid(1000)], |r| {
+        Ok((
+            (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+            Counters {
+                input: u(r.get(2)?),
+                output: u(r.get(3)?),
+                cache_read: u(r.get(4)?),
+                cache_write: u(r.get(5)?),
+                reasoning: u(r.get(6)?),
+                estimated: u(r.get(7)?),
+                events: u(r.get(8)?),
+            },
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (key, c) = row?;
+        out.insert(key, c);
+    }
+    Ok(out)
+}
+
 /// Most recent event time per agent (uses `idx_events_agent_ts`).
 pub fn last_event_by_agent(conn: &Connection) -> Result<HashMap<String, i64>> {
     let mut st = conn.prepare_cached("SELECT agent_id, MAX(ts_utc_ms) FROM usage_events GROUP BY agent_id")?;

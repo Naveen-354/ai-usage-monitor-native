@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use crate::api::{Backend, BackendError, BackendEvent, CollectorHealth, SettingsPatch};
-use crate::view::{AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
+use crate::view::{AccountsOverview, AppInfo, DayTotal, History, OverlayDiagnostics, Overview, PeriodOrCustom, Settings, UsageWindow};
 use crate::mock;
 
 pub struct MockBackend {
@@ -75,6 +75,32 @@ impl Backend for MockBackend {
     fn usage_window(&self, agent: &str) -> Result<Option<UsageWindow>, BackendError> {
         self.check_fail()?;
         Ok(mock::usage_window(mock::NOW_MS, agent))
+    }
+
+    fn accounts(&self) -> Result<AccountsOverview, BackendError> {
+        self.check_fail()?;
+        Ok(mock::accounts_overview())
+    }
+
+    fn use_account(&self, _agent: &str, _account: &str) -> Result<Option<String>, BackendError> {
+        self.check_fail()?;
+        Ok(None)
+    }
+
+    fn remove_account(&self, _agent: &str, _account: &str, _purge_usage: bool) -> Result<(), BackendError> {
+        self.check_fail()
+    }
+
+    fn add_account(&self, _agent: &str, _label: &str, _device_code: bool) -> Result<(), BackendError> {
+        self.check_fail()
+    }
+
+    fn reauthenticate_account(&self, _agent: &str, _account: &str) -> Result<(), BackendError> {
+        self.check_fail()
+    }
+
+    fn check_accounts(&self) -> Result<(), BackendError> {
+        self.check_fail()
     }
 
     fn settings(&self) -> Result<Settings, BackendError> {

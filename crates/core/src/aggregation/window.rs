@@ -49,7 +49,7 @@ pub fn current_window(conn: &Connection, settings: &Settings, agent: &str, now_u
     let mut start: Option<i64> = None;
     for ts in rows {
         let ts = ts?;
-        if start.map_or(true, |s| ts >= s.saturating_add(WINDOW_MS)) {
+        if start.is_none_or(|s| ts >= s.saturating_add(WINDOW_MS)) {
             start = Some(ts);
         }
     }

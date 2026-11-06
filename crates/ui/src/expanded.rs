@@ -17,6 +17,7 @@ use egui::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Page {
     Statistics,
+    Accounts,
     Settings,
     Diagnostics,
     Privacy,

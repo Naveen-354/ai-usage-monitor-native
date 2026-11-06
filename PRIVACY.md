@@ -13,9 +13,26 @@ to your own disk and keeps aggregated usage in a SQLite file on your own machine
 * **No prompts, code or conversations are collected.** Collectors deserialise typed structures that name
   only counter and metadata fields; every other field (message text, tool output, file contents) is skipped
   without being copied, stored or logged.
-* **No credentials are touched.** Files such as `auth.json`, `.credentials.json`, `oauth_creds.json` and
-  SSH keys are never opened.
+* **No credential file is ever opened.** Files such as `auth.json`, `.credentials.json`, `oauth_creds.json` and
+  SSH keys are never read; at most the app checks whether one exists. This holds for the usage collectors and for
+  the optional multi-account feature below.
 * **Logs contain paths, counts and states only.**
+
+## Multi-account management (optional)
+
+By default only each agent's own, existing sign-in is read, exactly as above. If you add a second account (the Accounts page, or the
+`agm` command-line manager), then:
+
+* **The agent signs you in, not this app.** It starts the agent's own sign-in in a console window of its own. Your password and tokens
+  go to the agent; this app never sees them.
+* **Each extra account gets its own profile folder** under `%APPDATA%\dev.aiusage.monitor.native\accounts\<agent>\`, written by the
+  agent. "Switching" only changes which folder the *next* launch of the agent is pointed at. The app never rewrites an agent's own
+  configuration or sign-in.
+* **What the app records:** the account's name, whether it is signed in, and which usage belongs to which account. No secret is ever
+  put in the database, a log line or an error message.
+* **API keys:** the desktop app never asks for one. The command-line manager accepts a key only on standard input (never as an
+  argument). It goes either to the agent's own store (Codex keeps its own) or to Windows Credential Manager, and nowhere else.
+* **Network:** still none from this app. Signing in is the agent talking to its own service.
 
 ## Exactly what is read, per agent
 

@@ -117,6 +117,7 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 | `ui` (`native-ui`) | egui modules: theme, expanded overlay, statistics, settings, diagnostics, motion logic, and the `web` kit that draws every screen. |
 | `platform` (`native-platform`) | tray icon, global-hotkey, autostart, single-instance, Win32 window helpers. |
 | `app` | the program: compact overlay, window handling, wiring of everything above. |
+| `agm` | the command-line account manager (`login`, `accounts`, `use`, `current`, `usage`, `run`, `remove`); the desktop Accounts page uses the same core. |
 
 ## Verified (by running it, not by reading it)
 
@@ -176,6 +177,10 @@ Hooks for design checks (set before launch): `AI_USAGE_MONITOR_MAIN_SIZE=WxH` si
 * **Reload agents** (Diagnostics page): the new `PATH` is read from the registry and the monitor detects every agent again, tested with a
   fake agent that appears after start (a plain rescan does not find it, the reload does) and by clicking the button headlessly. Not yet
   tried by installing a real agent while the app runs, and not built for macOS/Linux (there it re-detects but cannot see a new `PATH`).
+* **Multi-account management** (merged from `feature/multi-account-manager`, which had sat unmerged since 8 October): the merged tree builds
+  and every test passes, but I have not signed a real account in through the Accounts page or `agm`, so that path is covered by the
+  branch's own tests only. Its privacy rules are in `PRIVACY.md`. Merging fixed one test that failed on any PC without Codex installed
+  (the "default account" message now comes before the "not installed" check).
 * Known leftovers to clean up: first-generation egui pages that the design port superseded are still compiled and tested but no longer shown
   (`expanded::show`, `settings::page`, `diagnostics::show`, the `statistics` charts), as are the unused `motion::drag` and
   `platform::hotkeys` parsers (the validating parser in `ui::settings::shortcut` is the one in use). `expanded::Page` is still the tab enum.
