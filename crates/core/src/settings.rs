@@ -60,6 +60,10 @@ pub enum AnimationStyle {
     Tank,
     Equalizer,
     Warp,
+    Shoggoth,
+    Receipt,
+    Pet,
+    Paperclip,
 }
 
 /// How sharp and smooth the animated scenes are (canvas size and frame rate). Memory stays tiny at every level.

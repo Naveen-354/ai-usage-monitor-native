@@ -1,7 +1,6 @@
 // Release builds are a GUI app: no console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod accounts_view;
 mod app;
 mod backend;
 mod bridge;
@@ -16,9 +15,13 @@ mod terminal;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use ai_usage_monitor_core::api::{default_data_dir, Config};
+use ai_usage_monitor_core::api::Config;
 use native_platform::platform::tray::{TrayAction, TrayState};
 use native_ui::expanded::Page;
+
+/// Own folder, deliberately NOT `dev.aiusage.monitor` (the folder the earlier build of this app used): two builds must
+/// never write to one SQLite file.
+const DATA_DIR_NAME: &str = "dev.aiusage.monitor.native";
 
 #[derive(Debug, Default, PartialEq)]
 struct Args {
@@ -36,7 +39,6 @@ struct Args {
 fn parse_page(s: &str) -> Option<Page> {
     match s.to_ascii_lowercase().as_str() {
         "statistics" => Some(Page::Statistics),
-        "accounts" => Some(Page::Accounts),
         "settings" => Some(Page::Settings),
         "diagnostics" => Some(Page::Diagnostics),
         "privacy" => Some(Page::Privacy),
@@ -61,7 +63,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
             // Accepted and ignored: an earlier start-up entry passed it, and an unknown flag would stop the app at login.
             "--minimized" => {}
             "--open" => {
-                let v = it.next().ok_or("--open needs a page: statistics, accounts, settings, diagnostics or privacy")?;
+                let v = it.next().ok_or("--open needs a page: statistics, settings, diagnostics or privacy")?;
                 a.open = Some(parse_page(&v).ok_or_else(|| format!("unknown page '{v}'"))?);
             }
             other => return Err(format!("unknown argument '{other}'")),
@@ -74,7 +76,10 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Args, String> {
 }
 
 fn data_dir(args: &Args) -> PathBuf {
-args.data_dir.clone().unwrap_or_else(default_data_dir)
+    args.data_dir
+        .clone()
+        .or_else(|| std::env::var_os("AI_USAGE_MONITOR_DATA_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join(DATA_DIR_NAME))
 }
 
 fn fail(msg: &str, code: i32) -> ! {
@@ -167,7 +172,6 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ai_usage_monitor_core::api::DATA_DIR_NAME;
 
     fn args(list: &[&str]) -> Result<Args, String> {
         parse_args(list.iter().map(|s| s.to_string()))

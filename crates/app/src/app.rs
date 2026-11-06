@@ -17,7 +17,6 @@ use native_ui::expanded::Page;
 use native_ui::motion::counter::AnimatedCounter;
 use native_ui::motion::format::{format_compact, panel_alpha, platform_alpha_floor};
 use native_ui::theme;
-use native_ui::web::accounts::{self, Action as AccountAction};
 use native_ui::web::all_agents::{self, Action as AgentsAction};
 use native_ui::web::five_hour;
 use native_ui::web::heatmap;
@@ -28,7 +27,7 @@ use native_ui::web::{with_alpha, Tokens};
 use crate::backend::AppBackend;
 use crate::bridge;
 use crate::anim_host::AnimHost;
-use crate::flame::{engine_quality, engine_style, flame_state, motion_factor, next_period, period_word, pop_scale, scene_data};
+use crate::flame::{engine_quality, engine_style, flame_state, motion_factor, next_period, period_word, pop_scale};
 use crate::layout::default_compact_size;
 use crate::placement::{self, Area};
 use crate::shell::{HotkeyKind, OverlayShared, Shell, ShellEvent};
@@ -64,26 +63,6 @@ fn main_size() -> [f32; 2] {
         .unwrap_or(MAIN_SIZE)
 }
 
-/// How often the Accounts page re-reads the accounts (and their usage) while it is showing.
-const ACCOUNTS_REFRESH: Duration = Duration::from_secs(10);
-
-/// What the Accounts page shows and what it is in the middle of.
-#[derive(Default)]
-struct AccountsPage {
-    data: Option<view::AccountsOverview>,
-    error: Option<String>,
-    /// (message, is it a failure)
-    notice: Option<(String, bool)>,
-    state: accounts::State,
-    /// A check of every account's sign-in is running in the background.
-    checking: bool,
-    /// Something changed: read the accounts again at the next frame the page is showing.
-    dirty: bool,
-    last_read: Option<Instant>,
-    /// The first time the page opens, every account is checked once.
-    checked_once: bool,
-}
-
 struct MainWindow {
     open: bool,
     page: Page,
@@ -116,7 +95,6 @@ pub struct App {
     popping: Option<(i64, f32)>,
 
     main: MainWindow,
-    accounts: AccountsPage,
 
     shell: Option<Shell>,
     shared: Arc<OverlayShared>,
@@ -180,7 +158,6 @@ impl App {
             floater: None,
             popping: None,
             main: MainWindow { open: open_page.is_some(), page: open_page.unwrap_or(Page::Statistics), diag: None, status: None, agent: None },
-            accounts: AccountsPage::default(),
             shell,
             shared,
             overlay_visible: true,
@@ -208,15 +185,6 @@ impl App {
         for ev in self.events.try_iter() {
             match ev {
                 BackendEvent::OverviewChanged | BackendEvent::HealthChanged | BackendEvent::ImportProgress { .. } => refresh = true,
-                BackendEvent::AccountsChanged => self.accounts.dirty = true,
-                BackendEvent::AccountsChecked => {
-                    self.accounts.checking = false;
-                    self.accounts.dirty = true;
-                }
-                BackendEvent::AccountNotice(msg) => {
-                    let failed = msg.contains("did not complete");
-                    self.accounts.notice = Some((msg, failed));
-                }
                 other => others.push(other),
             }
         }
@@ -226,68 +194,6 @@ impl App {
         }
         for ev in others {
             self.store.apply(ev, &*self.backend);
-        }
-    }
-
-    /// Reads the accounts when the page is first shown, when something changed, and every few seconds while it is open (usage and
-    /// sign-in state move on their own). The first time, every account is also checked in the background.
-    fn refresh_accounts(&mut self) {
-        let stale = self.accounts.last_read.is_none_or(|t| t.elapsed() >= ACCOUNTS_REFRESH);
-        if !(self.accounts.dirty || self.accounts.data.is_none() && self.accounts.error.is_none() || stale) {
-            return;
-        }
-        self.accounts.dirty = false;
-        self.accounts.last_read = Some(Instant::now());
-        match self.backend.accounts() {
-            Ok(data) => {
-                self.accounts.data = Some(data);
-                self.accounts.error = None;
-            }
-            Err(e) => self.accounts.error = Some(e.to_string()),
-        }
-        if !self.accounts.checked_once {
-            self.accounts.checked_once = true;
-            self.start_account_check();
-        }
-    }
-
-    fn start_account_check(&mut self) {
-        match self.backend.check_accounts() {
-            Ok(()) => self.accounts.checking = true,
-            Err(e) => self.accounts.notice = Some((format!("Could not check the accounts: {e}"), true)),
-        }
-    }
-
-    /// Does what the Accounts page asked for. Each call reports its own failure on the page; nothing here can lose an account.
-    fn handle_account_actions(&mut self, actions: Vec<AccountAction>) {
-        for action in actions {
-            let result: Result<Option<String>, String> = match &action {
-                AccountAction::Use { agent, account } => self.backend.use_account(agent, account).map(|warning| warning.or(Some(format!("{agent} now uses {account}.")))).map_err(|e| e.to_string()),
-                AccountAction::Remove { agent, account } => self.backend.remove_account(agent, account, false).map(|()| Some(format!("Removed {agent}/{account}."))).map_err(|e| e.to_string()),
-                AccountAction::Add { agent, name, device_code } => self
-                    .backend
-                    .add_account(agent, name, *device_code)
-                    .map(|()| Some(format!("A console window opened for signing in {agent} as '{name}'. Finish it there.")))
-                    .map_err(|e| e.to_string()),
-                AccountAction::Reauthenticate { agent, account } => self
-                    .backend
-                    .reauthenticate_account(agent, account)
-                    .map(|()| Some(format!("A console window opened for signing {agent}/{account} in again. Finish it there.")))
-                    .map_err(|e| e.to_string()),
-                AccountAction::CheckAll => {
-                    self.start_account_check();
-                    Ok(None)
-                }
-            };
-            match result {
-                Ok(msg) => {
-                    if msg.is_some() {
-                        self.accounts.notice = msg.map(|m| (m, false));
-                    }
-                }
-                Err(e) => self.accounts.notice = Some((e, true)),
-            }
-            self.accounts.dirty = true;
         }
     }
 
@@ -589,7 +495,6 @@ impl App {
     fn step_fire_and_counter(&mut self, now: Instant, now_ms: i64, settings: &Settings) {
         // The chosen animation and quality (a change drops the old animation and builds the new one).
         self.fire.configure(engine_style(settings.animation_style), engine_quality(settings.animation_quality));
-        self.fire.set_data(scene_data(self.store.overview.as_ref(), now_ms));
         self.fire.step(now, flame_state(self.store.overview.as_ref(), now_ms), motion_factor(settings.animation_intensity));
 
         // A sudden jump in the total fires a burst scaled to its size.
@@ -633,7 +538,6 @@ impl App {
         let motion = motion_factor(settings.animation_intensity);
         let host = self.preview.get_or_insert_with(|| AnimHost::new("preview", style, quality));
         host.configure(style, quality);
-        host.set_data(scene_data(self.store.overview.as_ref(), chrono::Utc::now().timestamp_millis()));
         host.step(now, FlameState::Live, motion);
         if now.duration_since(self.preview_surge_at) >= PREVIEW_SURGE_EVERY {
             self.preview_surge_at = now;
@@ -871,14 +775,6 @@ impl App {
             }
             self.refresh_heatmap(ctx, settings);
         }
-        if self.main.page == Page::Accounts {
-            self.refresh_accounts();
-            ctx.request_repaint_after(ACCOUNTS_REFRESH);
-        }
-        let mut accounts_state = std::mem::take(&mut self.accounts.state);
-        let accounts_data = self.accounts.data.clone();
-        let (accounts_error, accounts_notice, accounts_checking) = (self.accounts.error.clone(), self.accounts.notice.clone(), self.accounts.checking);
-        let mut accounts_actions: Vec<AccountAction> = Vec::new();
         let heat_days: Option<Vec<view::DayTotal>> = self.heat.as_ref().and_then(|h| h.days.clone());
         let selected: Option<String> = self.main.agent.clone();
         let mut pick: Option<Option<String>> = None; // Some(None) = ALL was pressed
@@ -954,21 +850,6 @@ impl App {
                             }
                         }
                     }),
-                    Page::Accounts => pages::page(ui, |ui| {
-                        let out = accounts::show(
-                            ui,
-                            &accounts::Props {
-                                tokens: t,
-                                data: accounts_data.as_ref(),
-                                error: accounts_error.as_deref(),
-                                notice: accounts_notice.as_ref().map(|(m, _)| m.as_str()),
-                                notice_is_error: accounts_notice.as_ref().is_some_and(|(_, failed)| *failed),
-                                checking: accounts_checking,
-                            },
-                            &mut accounts_state,
-                        );
-                        accounts_actions = out.actions;
-                    }),
                     Page::Settings => {
                         let agents = overview.as_ref().map(|o| o.agents.as_slice()).unwrap_or(&[]);
                         let o = pages::settings_page(ui, &t, settings, agents, preview_tex);
@@ -991,8 +872,6 @@ impl App {
         if let Some(id) = open_cmd {
             self.open_terminal(&id);
         }
-        self.accounts.state = accounts_state;
-        self.handle_account_actions(accounts_actions);
         if close {
             self.main.open = false;
             self.main.agent = None; // the window opens on ALL again next time

@@ -75,6 +75,10 @@ pub fn engine_style(s: AnimationStyle) -> fire_engine::Style {
         AnimationStyle::Tank => E::Tank,
         AnimationStyle::Equalizer => E::Equalizer,
         AnimationStyle::Warp => E::Warp,
+        AnimationStyle::Shoggoth => E::Shoggoth,
+        AnimationStyle::Receipt => E::Receipt,
+        AnimationStyle::Pet => E::Pet,
+        AnimationStyle::Paperclip => E::Paperclip,
     }
 }
 
@@ -201,7 +205,7 @@ mod tests {
 
     #[test]
     fn every_setting_value_maps_to_its_own_engine_value() {
-        let styles = [AnimationStyle::Fire, AnimationStyle::Hamster, AnimationStyle::Duck, AnimationStyle::Slots, AnimationStyle::Pig, AnimationStyle::Cat, AnimationStyle::Muncher, AnimationStyle::Spitter, AnimationStyle::Chicken, AnimationStyle::Snail, AnimationStyle::Panda, AnimationStyle::Octopus, AnimationStyle::Gum, AnimationStyle::Heartbeat, AnimationStyle::Tank, AnimationStyle::Equalizer, AnimationStyle::Warp];
+        let styles = [AnimationStyle::Fire, AnimationStyle::Hamster, AnimationStyle::Duck, AnimationStyle::Slots, AnimationStyle::Pig, AnimationStyle::Cat, AnimationStyle::Muncher, AnimationStyle::Spitter, AnimationStyle::Chicken, AnimationStyle::Snail, AnimationStyle::Panda, AnimationStyle::Octopus, AnimationStyle::Gum, AnimationStyle::Heartbeat, AnimationStyle::Tank, AnimationStyle::Equalizer, AnimationStyle::Warp, AnimationStyle::Shoggoth, AnimationStyle::Receipt, AnimationStyle::Pet, AnimationStyle::Paperclip];
         let mapped: Vec<_> = styles.iter().map(|s| engine_style(*s)).collect();
         assert_eq!(mapped, fire_engine::Style::ALL, "same order, one engine style per setting value");
         assert_eq!(engine_quality(AnimationQuality::Low), fire_engine::Quality::Low);
