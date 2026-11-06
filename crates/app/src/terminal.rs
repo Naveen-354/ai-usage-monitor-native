@@ -50,14 +50,18 @@ pub fn open(agent_id: &str) -> Result<(), String> {
 #[cfg(windows)]
 fn spawn(program: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+    // `start` gives the new window a console of its own whatever the parent's standard handles are (started directly,
+    // the window would reuse them: a GUI app has none, a test harness has pipes). The quoted first argument is the
+    // window's title, which `start` requires. `/K` runs the tool and keeps the prompt when the tool exits. The outer
+    // `cmd` only exists to run `start`, so it stays hidden. `program` is from the fixed table, so it is safe to quote.
     let mut cmd = std::process::Command::new("cmd.exe");
-    // `/K` runs the command and keeps the prompt, so the window does not vanish when the tool exits.
-    cmd.arg("/K").arg(program).creation_flags(CREATE_NEW_CONSOLE);
+    cmd.raw_arg(format!("/C start \"{program}\" cmd.exe /K {program}")).creation_flags(CREATE_NO_WINDOW);
     if let Some(home) = dirs::home_dir() {
         cmd.current_dir(home);
     }
+    // Not waited for: `start` returns at once and the window outlives it.
     cmd.spawn().map(|_| ()).map_err(|e| format!("could not start cmd.exe: {e}"))
 }
 
@@ -129,6 +133,14 @@ mod tests {
         touch(d.path(), "aider.bat");
         let path = std::env::join_paths([d.path()]).unwrap();
         assert_eq!(text(find_on_path("aider", &path, ";.EXE; .BAT ;")), text(d.path().join("aider.bat")));
+    }
+
+    /// Manual check: `cargo test -p ai-usage-monitor-native opens_a_real_window -- --ignored`. Opens a real command
+    /// prompt on this computer running `claude` (so Claude Code must be installed); close the window afterwards.
+    #[test]
+    #[ignore = "opens a real command prompt window"]
+    fn opens_a_real_window() {
+        open("claude").unwrap();
     }
 
     #[test]
