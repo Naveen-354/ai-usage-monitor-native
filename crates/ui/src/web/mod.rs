@@ -4,7 +4,6 @@
 //! original design, not guessed. The fonts are JetBrains Mono (400/700/800) and Archivo Black, both SIL OFL
 //! (licences are in `assets/fonts`).
 
-pub mod accounts;
 pub mod all_agents;
 pub mod five_hour;
 pub mod fmt;

@@ -27,6 +27,14 @@ pub enum CoreEvent {
     HealthChanged,
 }
 
+/// Shared data directory for the desktop app and the account-manager CLI.
+pub fn default_data_dir() -> PathBuf {
+    std::env::var_os("AI_USAGE_MONITOR_DATA_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("dev.aiusage.monitor.native"))
+}
+
 pub struct Config {
     pub data_dir: PathBuf,
     pub db_path: PathBuf,

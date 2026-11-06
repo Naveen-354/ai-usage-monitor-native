@@ -17,8 +17,8 @@ use crate::view::{AgentOverview, AnimationIntensity, AnimationQuality, Animation
 
 // ------------------------------------------------------------------------------------------------ header and tabs
 
-pub const PAGES: [(Page, &str); 5] =
-    [(Page::Statistics, "STATISTICS"), (Page::Accounts, "ACCOUNTS"), (Page::Settings, "SETTINGS"), (Page::Diagnostics, "DIAGNOSTICS"), (Page::Privacy, "PRIVACY")];
+pub const PAGES: [(Page, &str); 4] =
+    [(Page::Statistics, "STATISTICS"), (Page::Settings, "SETTINGS"), (Page::Diagnostics, "DIAGNOSTICS"), (Page::Privacy, "PRIVACY")];
 pub const HEADER_H: f32 = 38.89 + BW;
 
 /// Width of each tab: its text plus 16 px padding either side and its borders (the first also has a left border).
@@ -86,7 +86,7 @@ const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 const CORNERS: [(Corner, &str); 5] = [(Corner::TopRight, "Top right"), (Corner::TopLeft, "Top left"), (Corner::BottomRight, "Bottom right"), (Corner::BottomLeft, "Bottom left"), (Corner::Custom, "Custom (dragged)")];
 
 /// The animations on offer, in the order of the drop-down.
-pub const STYLES: [(AnimationStyle, &str); 21] = [
+pub const STYLES: [(AnimationStyle, &str); 23] = [
     (AnimationStyle::Fire, "Fire (classic)"),
     (AnimationStyle::Hamster, "Hamster wheel"),
     (AnimationStyle::Duck, "Rubber duck"),
@@ -108,6 +108,8 @@ pub const STYLES: [(AnimationStyle, &str); 21] = [
     (AnimationStyle::Receipt, "Receipt spool (token rate)"),
     (AnimationStyle::Pet, "Pocket pet (evolves with the day)"),
     (AnimationStyle::Paperclip, "Vibe paperclip"),
+    (AnimationStyle::Blaster, "Bot blaster (shoots upward)"),
+    (AnimationStyle::Scope, "Scope shot (bot hunt)"),
 ];
 pub const QUALITIES: [(AnimationQuality, &str); 3] = [(AnimationQuality::Low, "Low (lightest)"), (AnimationQuality::Medium, "Medium"), (AnimationQuality::High, "High (sharpest)")];
 /// What each quality costs, said under the picker. The canvas is one byte per pixel, so even High stays far under a megabyte.
@@ -599,15 +601,13 @@ mod tests {
     #[test]
     fn the_tabs_are_as_wide_as_in_the_browser() {
         // Measured in a browser at 11px bold with 0.12em spacing: STATISTICS 115.2 (incl. both borders), SETTINGS 97.38,
-        // DIAGNOSTICS 121.13, PRIVACY 89.45. ACCOUNTS is new, so it has no browser measurement; it follows the same formula.
+        // DIAGNOSTICS 121.13, PRIVACY 89.45.
         let w = tab_widths(&ctx());
         let by_label = |label: &str| w[PAGES.iter().position(|(_, l)| *l == label).unwrap()];
         for (label, want) in [("STATISTICS", 115.2), ("SETTINGS", 97.38), ("DIAGNOSTICS", 121.13), ("PRIVACY", 89.45)] {
             assert!((by_label(label) - want).abs() < 0.2, "{label}: tab width {} vs browser {want}", by_label(label));
         }
-        let accounts = by_label("ACCOUNTS");
-        assert!((accounts - by_label("SETTINGS")).abs() < 0.01 && accounts < by_label("STATISTICS"), "8 letters in a monospace font: as wide as SETTINGS, narrower than STATISTICS (10): {accounts}");
-        assert!(w.iter().sum::<f32>() + 213.0 + 24.0 <= 780.0, "all five tabs and the title fit in the window's minimum width");
+        assert!(w.iter().sum::<f32>() + 213.0 + 24.0 <= 780.0, "all four tabs and the title fit in the window's minimum width");
     }
 
     #[test]
